@@ -45,3 +45,4 @@ bin/
 # trash
 GEMINI.md
 PIPELINE_SVILUPPO.md
+tmp/
