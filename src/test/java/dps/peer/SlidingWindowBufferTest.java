@@ -171,4 +171,33 @@ public class SlidingWindowBufferTest {
         assertEquals(4.0, result2.get(0).value());
         assertEquals(11.0, result2.get(7).value());
     }
+
+    @Test
+    void testBufferMaxCapacityDrop() {
+        // We add 105 measurements, but MAX_CAPACITY is set to 100 in the buffer.
+        // The policy is "Silent Discard" (Drop new data if the buffer is full).
+        for (int i = 0; i < 105; i++) {
+            buffer.addMeasurement(new Measurement("peer1", "vibration", i, System.currentTimeMillis()));
+        }
+
+        List<Measurement> result = buffer.readAllAndClear();
+        
+        /* 
+         * Calculation for 100 elements (indexed 0 to 99):
+         * WINDOW_SIZE = 8, STEP = 4.
+         * The n-th window ends at index: (n-1) * STEP + WINDOW_SIZE - 1
+         * We find the maximum n such that: (n-1) * 4 + 7 <= 99
+         * (n-1) * 4 <= 92  =>  n-1 <= 23  =>  n <= 24.
+         * 
+         * Exactly 24 complete windows can be formed.
+         * Total elements in the flat list = 24 windows * 8 elements = 192.
+         */
+        assertEquals(192, result.size(), "Buffer should contain exactly 24 windows (192 elements) after dropping data beyond 100");
+        
+        /*
+         * Since we dropped measurements from 100 to 104, the very last measurement 
+         * in the last window must be the one with value 99.0.
+         */
+        assertEquals(99.0, result.get(result.size() - 1).value(), "The last stored value should be 99.0 (values 100-104 should be dropped)");
+    }
 }

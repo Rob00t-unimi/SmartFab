@@ -14,9 +14,15 @@ public class SlidingWindowBuffer implements Buffer {
     private final List<Measurement> measurements = new ArrayList<>();
     private static final int WINDOW_SIZE = 8;
     private static final int OVERLAP_STEP = 4;
+    private static final int MAX_CAPACITY = 100;
 
     @Override
     public synchronized void addMeasurement(Measurement m) {
+        if (measurements.size() >= MAX_CAPACITY) {
+            // Drop new measurement if buffer is full to preserve real-time sensor behavior
+            return;
+        }
+        
         measurements.add(m);
         // Notify any waiting consumer that new data is available
         if (measurements.size() >= WINDOW_SIZE) {
