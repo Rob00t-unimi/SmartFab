@@ -118,4 +118,57 @@ public class SlidingWindowBufferTest {
         assertEquals(8.0, result.get(8).value());
         assertEquals(15.0, result.get(15).value());
     }
+
+    @Test
+    void testReadWhenNotEnoughDataBlocks() {
+        // Adding only 7 measurements (less than WINDOW_SIZE = 8)
+        for (int i = 0; i < 7; i++) {
+            buffer.addMeasurement(new Measurement("peer1", "vibration", i, System.currentTimeMillis()));
+        }
+
+        Thread consumerThread = new Thread(() -> buffer.readAllAndClear());
+        consumerThread.start();
+
+        try {
+            // Give it some time to start and enter the wait() state
+            Thread.sleep(200);
+            assertTrue(consumerThread.isAlive(), "Thread should be waiting for the 8th measurement");
+            
+            // Now add the 8th measurement
+            buffer.addMeasurement(new Measurement("peer1", "vibration", 7.0, System.currentTimeMillis()));
+            
+            // Give it time to wake up and finish
+            Thread.sleep(200);
+            assertFalse(consumerThread.isAlive(), "Thread should have finished after getting 8th measurement");
+        } catch (InterruptedException e) {
+            fail("Test interrupted");
+        }
+    }
+
+    @Test
+    void testReadWithPartialNextWindow() {
+        // Adding 10 measurements:
+        // Window 1: [0, 1, 2, 3, 4, 5, 6, 7]
+        // Remaining after slide: [4, 5, 6, 7, 8, 9] (size 6, which is < 8)
+        for (int i = 0; i < 10; i++) {
+            buffer.addMeasurement(new Measurement("peer1", "vibration", i, System.currentTimeMillis()));
+        }
+
+        List<Measurement> result = buffer.readAllAndClear();
+        
+        // Should only return one window (8 elements)
+        assertEquals(8, result.size(), "Should only return one complete window");
+        assertEquals(0.0, result.get(0).value());
+        assertEquals(7.0, result.get(7).value());
+
+        // Now add 2 more measurements (6 existing + 2 new = 8)
+        for (int i = 10; i < 12; i++) {
+            buffer.addMeasurement(new Measurement("peer1", "vibration", i, System.currentTimeMillis()));
+        }
+
+        List<Measurement> result2 = buffer.readAllAndClear();
+        assertEquals(8, result2.size(), "Should now return the second complete window");
+        assertEquals(4.0, result2.get(0).value());
+        assertEquals(11.0, result2.get(7).value());
+    }
 }
