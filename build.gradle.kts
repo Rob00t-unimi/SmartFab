@@ -1,7 +1,7 @@
 plugins {
     id("java")
     id("com.google.protobuf") version "0.10.0"
-    id("org.springframework.boot") version "4.0.6"
+    id("org.springframework.boot") version "3.4.2"
     id("io.spring.dependency-management") version "1.1.7"
 }
 
@@ -18,6 +18,7 @@ val protobufVersion = "4.34.1"
 dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
     // Protocol Buffers

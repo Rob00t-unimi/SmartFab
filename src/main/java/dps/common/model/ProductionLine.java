@@ -1,4 +1,4 @@
-package dps.productionLine;
+package dps.common.model;
 
 import java.util.regex.Pattern;
 
