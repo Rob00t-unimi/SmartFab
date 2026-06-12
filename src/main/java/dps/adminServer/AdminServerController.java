@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.NoSuchElementException;
 
 @RestController
 @RequestMapping("/production-lines")
@@ -35,11 +36,15 @@ public class AdminServerController {
     }
 
     @GetMapping("/{id}/stats")
-    public ResponseEntity<Double> getStats(
+    public ResponseEntity<?> getStats(
             @PathVariable int id,
             @RequestParam long t1,
             @RequestParam long t2) {
-        double avg = registry.getAverageVibration(id, t1, t2);
-        return ResponseEntity.ok(avg);
+        try {
+            double avg = registry.getAverageVibration(id, t1, t2);
+            return ResponseEntity.ok(avg);
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+        }
     }
 }

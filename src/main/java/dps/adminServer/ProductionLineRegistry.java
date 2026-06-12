@@ -63,10 +63,14 @@ public class ProductionLineRegistry {
     /**
      * Computes average vibration for a line between t1 and t2.
      * Fine-grained synchronization: we only lock the telemetry list for that specific line.
+     * @throws NoSuchElementException if the ID is not registered.
      */
     public double getAverageVibration(int id, long t1, long t2) {
         List<TelemetryEntry> entries;
         synchronized (this) {
+            if (!lines.containsKey(id)) {
+                throw new NoSuchElementException("Production Line with ID " + id + " not found.");
+            }
             List<TelemetryEntry> original = telemetryData.get(id);
             if (original == null) return 0.0;
             // Create a copy to minimize the time we hold the main lock
