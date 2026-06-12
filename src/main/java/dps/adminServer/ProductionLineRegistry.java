@@ -2,6 +2,7 @@ package dps.adminServer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.common.model.ProductionLineStatus;
 
 import java.util.*;
 
@@ -29,6 +30,14 @@ public class ProductionLineRegistry {
         telemetryData.put(newLine.id(), new ArrayList<>());
         
         return peers;
+    }
+
+    public synchronized List<ProductionLineStatus> getLinesStatus() {
+        List<ProductionLineStatus> statusList = new ArrayList<>();
+        for (Integer id : lines.keySet()) {
+            statusList.add(new ProductionLineStatus(lines.get(id), states.get(id)));
+        }
+        return statusList;
     }
 
     public synchronized List<ProductionLine> getAllLines() {

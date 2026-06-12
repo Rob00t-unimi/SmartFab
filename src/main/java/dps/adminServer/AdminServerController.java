@@ -2,12 +2,12 @@ package dps.adminServer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.common.model.ProductionLineStatus;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/production-lines")
@@ -30,13 +30,8 @@ public class AdminServerController {
     }
 
     @GetMapping
-    public List<ProductionLine> getLines() {
-        return registry.getAllLines();
-    }
-
-    @GetMapping("/states")
-    public Map<Integer, OperationalState> getStates() {
-        return registry.getCurrentStates();
+    public List<ProductionLineStatus> getLinesStatus() {
+        return registry.getLinesStatus();
     }
 
     @GetMapping("/{id}/stats")
