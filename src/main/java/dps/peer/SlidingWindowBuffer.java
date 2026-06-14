@@ -13,20 +13,27 @@ import java.util.List;
 public class SlidingWindowBuffer implements Buffer {
 
     private static final int WINDOW_SIZE = 8;
-    private static final int OVERLAP_STEP = 4;
+    private static final int OVERLAP_STEP = WINDOW_SIZE / 2;
 
     private final List<Measurement> measurements = new ArrayList<>();
 
     @Override
     public synchronized void addMeasurement(Measurement m) {
-        if (measurements.size() >= WINDOW_SIZE) {
-            // Drop new measurement if window is full
-            return;
+        // Wait if the buffer is full (reaches WINDOW_SIZE)
+        // This effectively pauses the sensor thread until space is available.
+        while (measurements.size() >= WINDOW_SIZE) {
+            try {
+                wait();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
 
         measurements.add(m);
-        // Notify if window is now complete
-        if (measurements.size() == WINDOW_SIZE) {
+
+        // Notify readers if the window is now complete
+        if (measurements.size() >= WINDOW_SIZE) {
             notifyAll();
         }
     }
@@ -44,12 +51,15 @@ public class SlidingWindowBuffer implements Buffer {
         }
 
         // Return the current window
-        List<Measurement> result = new ArrayList<>(measurements);
+        List<Measurement> result = new ArrayList<>(measurements.subList(0, WINDOW_SIZE));
 
-        // Slide: remove the first 4 (50% overlap)
+        // Slide: remove the first OVERLAP_STEP elements (50% overlap)
         for (int i = 0; i < OVERLAP_STEP; i++) {
             measurements.remove(0);
         }
+
+        // Notify the producer (sensor) that there is now space in the buffer
+        notifyAll();
 
         return result;
     }

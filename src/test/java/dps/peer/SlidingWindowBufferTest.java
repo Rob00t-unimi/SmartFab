@@ -90,15 +90,29 @@ public class SlidingWindowBufferTest {
     }
 
     @Test
-    void testBufferMaxCapacityDrop() {
-        // Capacity is 8. Adding 10 should drop the last 2.
-        for (int i = 0; i < 10; i++) {
+    void testAddBeyondCapacityBlocks() {
+        // Fill the buffer
+        for (int i = 0; i < 8; i++) {
             buffer.addMeasurement(new Measurement("peer1", "vibration", i, System.currentTimeMillis()));
         }
 
-        List<Measurement> result = buffer.readAllAndClear();
-        assertEquals(8, result.size());
-        // Last element should be 7.0 (8.0 and 9.0 were dropped)
-        assertEquals(7.0, result.get(7).value());
+        // Try to add one more in a separate thread
+        Thread producerThread = new Thread(() -> 
+            buffer.addMeasurement(new Measurement("peer1", "vibration", 8.0, System.currentTimeMillis()))
+        );
+        producerThread.start();
+
+        try {
+            Thread.sleep(200);
+            assertTrue(producerThread.isAlive(), "Producer thread should be blocked as buffer is full");
+            
+            // Read to free some space
+            buffer.readAllAndClear();
+            
+            Thread.sleep(200);
+            assertFalse(producerThread.isAlive(), "Producer thread should have finished after space was freed");
+        } catch (InterruptedException e) {
+            fail("Test interrupted");
+        }
     }
 }
