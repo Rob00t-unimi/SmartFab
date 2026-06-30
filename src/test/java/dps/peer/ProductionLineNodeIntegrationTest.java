@@ -1,6 +1,7 @@
 package dps.peer;
 
 import dps.common.model.ProductionLine;
+import dps.common.model.OperationalState;
 import dps.adminServer.ProductionLineRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -147,5 +148,67 @@ public class ProductionLineNodeIntegrationTest {
             node.registerWithAdminServer();
         });
         assertTrue(exception.getMessage().contains("Connection failed"));
+    }
+
+    @Test
+    public void testP2PMutualExclusionCalibration() throws Exception {
+        String serverUrl = "http://localhost:" + port;
+
+        // 1. Initialize Node 1 (ID 1, average = 90.0 -> criticality = 0.125)
+        ProductionLine self1 = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node1 = createAndStartNode(self1, serverUrl);
+        node1.setState(OperationalState.WAITING_FOR_CALIBRATION);
+        node1.setLastCalculatedAverage(90.0);
+
+        // 2. Initialize Node 2 (ID 2, average = 100.0 -> criticality = 0.25)
+        // Node 2 has HIGHER criticality, so it must calibrate FIRST
+        ProductionLine self2 = new ProductionLine(2, "127.0.0.1", 5002);
+        ProductionLineNode node2 = createAndStartNode(self2, serverUrl);
+        node2.setState(OperationalState.WAITING_FOR_CALIBRATION);
+        node2.setLastCalculatedAverage(100.0);
+
+        // 3. Establish P2P topology view manually (without REST to avoid registration overhead)
+        node1.addPeer(self2);
+        node2.addPeer(self1);
+
+        // 4. Trigger calibration concurrently on both nodes in separate threads
+        Thread t1 = new Thread(() -> {
+            node1.enterCalibrationAndWait();
+            node1.releaseCalibration();
+        });
+        Thread t2 = new Thread(() -> {
+            node2.enterCalibrationAndWait();
+            node2.releaseCalibration();
+        });
+
+        t1.start();
+        t2.start();
+
+        // Give them a moment (1.5 seconds) to negotiate priorities via gRPC
+        Thread.sleep(1500);
+
+        // Assertion 1: Node 2 (higher priority) should have successfully entered UNDER_CALIBRATION
+        assertEquals(OperationalState.UNDER_CALIBRATION, node2.getState());
+
+        // Assertion 2: Node 1 (lower priority) must be BLOCKED in WAITING_FOR_CALIBRATION (its reply was deferred by Node 2)
+        assertEquals(OperationalState.WAITING_FOR_CALIBRATION, node1.getState());
+
+        // 5. Wait for Node 2 to complete calibration (transition back to FULLY_OPERATIONAL, max 10 seconds)
+        long startTime = System.currentTimeMillis();
+        while (node2.getState() == OperationalState.UNDER_CALIBRATION && (System.currentTimeMillis() - startTime) < 10000) {
+            Thread.sleep(200);
+        }
+
+        // Assertion 3: Node 2 has completed calibration and returned to FULLY_OPERATIONAL
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node2.getState());
+
+        // Assertion 4: Node 1 has received the deferred reply, unblocked, and entered UNDER_CALIBRATION
+        assertEquals(OperationalState.UNDER_CALIBRATION, node1.getState());
+
+        // Cleanup the coordinator threads
+        t1.interrupt();
+        t2.interrupt();
+        t1.join();
+        t2.join();
     }
 }
