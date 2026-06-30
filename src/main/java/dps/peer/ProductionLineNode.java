@@ -51,6 +51,9 @@ public class ProductionLineNode {
     private long logicalClock = 0;
     private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();
     private double lastCalculatedAverage = 0.0;
+    
+    // Reply count tracking (Lab 6 - Feature 3 Commit 1)
+    private int repliesReceived = 0;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
@@ -366,7 +369,155 @@ public class ProductionLineNode {
         sensor.pauseMeasuring();
         buffer.clear();
 
-        // TODO: In Feature 3, we will trigger the Ricart-Agrawala calibration request here
+        // Asynchronously coordinate the calibration sequence in a separate thread (Lab 6 - Commit 3)
+        new Thread(() -> {
+            enterCalibrationAndWait();
+            releaseCalibration();
+        }, "Calibration-Coordinator-Thread-Node-" + self.id()).start();
+    }
+
+    /**
+     * Sends a gRPC request for calibration to all active peers in parallel.
+     */
+    public void requestCalibration(double averageVibration) {
+        List<ProductionLine> currentPeers = getPeers();
+
+        long requestTimestamp;
+        double requestCriticality;
+
+        synchronized (this) {
+            incrementClock();
+            requestTimestamp = getLogicalClock();
+            requestCriticality = (averageVibration - 80.0) / 80.0;
+            resetRepliesReceived();
+        }
+
+        if (currentPeers.isEmpty()) {
+            System.out.println("[LINEA " + self.id() + "] No peers in topology. No replies needed.");
+            return;
+        }
+
+        System.out.println("[LINEA " + self.id() + "] Requesting calibration from " + currentPeers.size() 
+                + " peer(s) in parallel (Clock: " + requestTimestamp 
+                + ", Criticality: " + String.format("%.4f", requestCriticality) + ")...");
+
+        ExecutorService executor = Executors.newCachedThreadPool();
+
+        for (ProductionLine peer : currentPeers) {
+            executor.submit(() -> {
+                ManagedChannel channel = null;
+                try {
+                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
+                            .usePlaintext()
+                            .build();
+
+                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
+
+                    dps.peer.proto.CalibrationRequest request = dps.peer.proto.CalibrationRequest.newBuilder()
+                            .setSenderId(self.id())
+                            .setCriticality(requestCriticality)
+                            .setTimestamp(requestTimestamp)
+                            .build();
+
+                    // Timeout of 5 seconds for reply response
+                    stub.withDeadlineAfter(5, TimeUnit.SECONDS).requestCalibration(request);
+
+                    // Reply received successfully
+                    incrementRepliesReceived();
+                    System.out.println("[LINEA " + self.id() + "] Received CalibrationReply from Node " + peer.id());
+
+                } catch (Exception e) {
+                    System.err.println("[LINEA " + self.id() + "] ❌ Failed to get CalibrationReply from Node " 
+                            + peer.id() + " - Error: " + e.getMessage());
+                    // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
+                    incrementRepliesReceived();
+                } finally {
+                    if (channel != null) {
+                        try {
+                            channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+            });
+        }
+
+        // Shutdown the executor so threads terminate when tasks finish, but return immediately
+        // to avoid blocking the calling thread.
+        executor.shutdown();
+    }
+
+    /**
+     * Blocks the current thread and requests calibration access from peers.
+     * Transitions state to UNDER_CALIBRATION and performs the simulated calibration once allowed.
+     */
+    public void enterCalibrationAndWait() {
+        double avg = getLastCalculatedAverage();
+        
+        System.out.println("[LINEA " + self.id() + "] [WAITING_FOR_CALIBRATION] Initiating Ricart-Agrawala calibration sequence...");
+        
+        // 1. Broadcast the requests to peers
+        requestCalibration(avg);
+
+        // 2. Wait until we receive all replies
+        int requiredReplies = getPeerCount();
+        synchronized (this) {
+            while (getRepliesReceived() < requiredReplies) {
+                try {
+                    System.out.println("[LINEA " + self.id() + "] Waiting for replies... (Progress: " 
+                            + getRepliesReceived() + "/" + requiredReplies + ")");
+                    wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            
+            // 3. Enter calibration section
+            setState(OperationalState.UNDER_CALIBRATION);
+        }
+
+        // Generate random calibration duration between 3 and 7 seconds
+        long duration = 3000 + (long) (Math.random() * 4000);
+        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] 🛠️ Entered calibration mode. Calibrating for " + duration + " ms...");
+        
+        try {
+            Thread.sleep(duration);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] Calibration execution finished.");
+    }
+
+    /**
+     * Releases the calibration resource, replies to all deferred peer requests,
+     * updates the state to FULLY_OPERATIONAL, and restarts the physical sensor.
+     */
+    public void releaseCalibration() {
+        List<StreamObserver<CalibrationReply>> observers;
+
+        synchronized (this) {
+            setState(OperationalState.FULLY_OPERATIONAL);
+            observers = getAndClearDeferredObservers();
+        }
+
+        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION -> FULLY_OPERATIONAL] Calibration completed. Releasing " 
+                + observers.size() + " deferred replies...");
+
+        for (StreamObserver<CalibrationReply> observer : observers) {
+            try {
+                observer.onNext(CalibrationReply.getDefaultInstance());
+                observer.onCompleted();
+            } catch (Exception e) {
+                System.err.println("[LINEA " + self.id() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
+            }
+        }
+
+        // Restart physical sensor measuring loop
+        sensor.startMeasuring();
+        System.out.println("[LINEA " + self.id() + "] Physical sensor simulator resumed.");
     }
 
     public synchronized OperationalState getState() {
@@ -415,6 +566,20 @@ public class ProductionLineNode {
 
     public synchronized void setLastCalculatedAverage(double average) {
         this.lastCalculatedAverage = average;
+    }
+
+    // Reply tracking methods (Lab 6 - Feature 3 Commit 1)
+    public synchronized void incrementRepliesReceived() {
+        repliesReceived++;
+        notifyAll(); // Wake up thread waiting for replies
+    }
+
+    public synchronized int getRepliesReceived() {
+        return repliesReceived;
+    }
+
+    public synchronized void resetRepliesReceived() {
+        repliesReceived = 0;
     }
 
     public ProductionLine getSelf() {
