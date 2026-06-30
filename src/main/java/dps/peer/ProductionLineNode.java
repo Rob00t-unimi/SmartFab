@@ -1,6 +1,9 @@
 package dps.peer;
 
 import dps.common.model.ProductionLine;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,11 +36,17 @@ public class ProductionLineNode {
             System.out.println("Starting Production Line Node " + node.getSelf().id() + " on " + node.getSelf().ip() + ":" + node.getSelf().port());
             System.out.println("Admin Server URL: " + node.getServerUrl());
 
-            // REST Registration and gRPC initialization will be added in subsequent steps.
+            // REST Registration
+            node.registerWithAdminServer();
+
+            // Next step: start gRPC server and sensor loop
 
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
             System.err.println("Usage: java dps.peer.ProductionLineNode <id> <ip> <port> [serverUrl]");
+            System.exit(1);
+        } catch (IllegalStateException e) {
+            System.err.println("Startup Failed: " + e.getMessage());
             System.exit(1);
         }
     }
@@ -69,6 +78,33 @@ public class ProductionLineNode {
         ProductionLine self = new ProductionLine(id, ip, port);
 
         return new NodeConfig(self, serverUrl);
+    }
+
+    /**
+     * Registers this node with the Admin Server via REST POST.
+     * Populates the local peer list with the response on success.
+     */
+    public void registerWithAdminServer() {
+        RestTemplate restTemplate = new RestTemplate();
+        String url = this.serverUrl + "/production-lines";
+
+        try {
+            // Perform HTTP POST request. Spring will automatically serialize 'this.self' into JSON
+            // and deserialize the response JSON array into an array of ProductionLine.
+            ProductionLine[] response = restTemplate.postForObject(url, this.self, ProductionLine[].class);
+            if (response != null) {
+                for (ProductionLine peer : response) {
+                    addPeer(peer);
+                }
+                System.out.println("Node " + self.id() + " registered successfully. Loaded " + response.length + " peer(s) from registry.");
+            }
+        } catch (HttpClientErrorException.Conflict e) {
+            throw new IllegalStateException("Registration conflict: Node with ID " + self.id() + " is already registered.");
+        } catch (ResourceAccessException e) {
+            throw new IllegalStateException("Connection failed: Admin Server is offline or unreachable at " + url);
+        } catch (Exception e) {
+            throw new IllegalStateException("Registration failed due to unexpected error: " + e.getMessage(), e);
+        }
     }
 
     public ProductionLine getSelf() {
