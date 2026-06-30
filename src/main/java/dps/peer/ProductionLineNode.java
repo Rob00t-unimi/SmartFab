@@ -71,7 +71,7 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            // 4. Start monitoring sensor and window consumer loop (Lab 6 - Commit 2)
+            // 4. Start monitoring sensor and window consumer loop (Lab 6)
             node.startMonitoring();
 
             System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
@@ -307,6 +307,11 @@ public class ProductionLineNode {
                     System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
                             + String.format("%.2f", average) + " (Soglia: 80.0)");
 
+                    // Check if threshold exceeded to trigger calibration transition (Lab 6 - Commit 3)
+                    if (average > 80.0 && getState() == OperationalState.FULLY_OPERATIONAL) {
+                        transitionToWaitingForCalibration(average);
+                    }
+
                 } catch (Exception e) {
                     if (!running) {
                         break;
@@ -336,6 +341,22 @@ public class ProductionLineNode {
             monitoringThread = null;
         }
         System.out.println("[LINEA " + self.id() + "] Sensor monitoring loop stopped.");
+    }
+
+    /**
+     * Local state transition to WAITING_FOR_CALIBRATION.
+     * Pauses the physical sensor simulator and clears the window buffer.
+     */
+    private synchronized void transitionToWaitingForCalibration(double average) {
+        setState(OperationalState.WAITING_FOR_CALIBRATION);
+
+        System.out.println("[LINEA " + self.id() + "] [FULLY_OPERATIONAL -> WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
+                + String.format("%.2f", average) + " exceeded threshold 80.0! Pausing sensor, clearing buffer, and requesting calibration...");
+
+        sensor.pauseMeasuring();
+        buffer.clear();
+
+        // TODO: In Feature 3, we will trigger the Ricart-Agrawala calibration request here
     }
 
     public synchronized OperationalState getState() {
