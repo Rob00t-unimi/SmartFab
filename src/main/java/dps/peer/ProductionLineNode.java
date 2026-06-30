@@ -439,15 +439,52 @@ public class ProductionLineNode {
             });
         }
 
+        // Shutdown the executor so threads terminate when tasks finish, but return immediately
+        // to avoid blocking the calling thread.
         executor.shutdown();
-        try {
-            if (!executor.awaitTermination(6, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
+    }
+
+    /**
+     * Blocks the current thread and requests calibration access from peers.
+     * Transitions state to UNDER_CALIBRATION and performs the simulated calibration once allowed.
+     */
+    public void enterCalibrationAndWait() {
+        double avg = getLastCalculatedAverage();
+        
+        System.out.println("[LINEA " + self.id() + "] [WAITING_FOR_CALIBRATION] Initiating Ricart-Agrawala calibration sequence...");
+        
+        // 1. Broadcast the requests to peers
+        requestCalibration(avg);
+
+        // 2. Wait until we receive all replies
+        int requiredReplies = getPeerCount();
+        synchronized (this) {
+            while (getRepliesReceived() < requiredReplies) {
+                try {
+                    System.out.println("[LINEA " + self.id() + "] Waiting for replies... (Progress: " 
+                            + getRepliesReceived() + "/" + requiredReplies + ")");
+                    wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
+            
+            // 3. Enter calibration section
+            setState(OperationalState.UNDER_CALIBRATION);
+        }
+
+        // Generate random calibration duration between 3 and 7 seconds
+        long duration = 3000 + (long) (Math.random() * 4000);
+        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] 🛠️ Entered calibration mode. Calibrating for " + duration + " ms...");
+        
+        try {
+            Thread.sleep(duration);
         } catch (InterruptedException e) {
-            executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+
+        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] Calibration execution finished.");
     }
 
     public synchronized OperationalState getState() {

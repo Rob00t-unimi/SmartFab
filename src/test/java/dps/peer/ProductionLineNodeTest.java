@@ -4,6 +4,7 @@ import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;
+import dps.peer.proto.PeerServiceGrpc;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 
@@ -347,7 +348,7 @@ public class ProductionLineNodeTest {
     }
 
     @Test
-    public void testRequestCalibrationClientBroadcast() {
+    public void testRequestCalibrationClientBroadcast() throws Exception {
         ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
@@ -361,10 +362,66 @@ public class ProductionLineNodeTest {
         // Perform request broadcast
         node.requestCalibration(90.0);
 
+        // Wait for async task to fail and increment counter
+        Thread.sleep(300);
+
         // Assert logical clock incremented
         assertEquals(1, node.getLogicalClock());
 
         // Since the peer is offline, the exception is caught, and it fallback-increments the reply counter
         assertEquals(1, node.getRepliesReceived());
+    }
+
+    @Test
+    public void testEnterCalibrationAndWaitBlocksUntilReplies() throws Exception {
+        // Start a mock gRPC server on 5002 that holds the request open
+        io.grpc.Server mockServer = io.grpc.ServerBuilder.forPort(5002)
+                .addService(new PeerServiceGrpc.PeerServiceImplBase() {
+                    @Override
+                    public void requestCalibration(CalibrationRequest request, StreamObserver<CalibrationReply> responseObserver) {
+                        // Do nothing to simulate delay and keep the connection open
+                    }
+                })
+                .build()
+                .start();
+
+        try {
+            ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+            ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+            // Add the peer pointing to our mock server
+            ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
+            node.addPeer(peer);
+
+            node.setState(OperationalState.WAITING_FOR_CALIBRATION);
+            node.setLastCalculatedAverage(90.0);
+
+            // Run enterCalibrationAndWait in a separate thread so it can block
+            Thread coordThread = new Thread(node::enterCalibrationAndWait);
+            coordThread.start();
+
+            // Give it a moment to run and block
+            Thread.sleep(400);
+
+            // Verify that the thread is blocked and state remains WAITING_FOR_CALIBRATION
+            assertTrue(coordThread.isAlive());
+            assertEquals(OperationalState.WAITING_FOR_CALIBRATION, node.getState());
+
+            // Simulate receiving the reply
+            node.incrementRepliesReceived();
+
+            // Give it a moment to process the wake up
+            Thread.sleep(200);
+
+            // State should now transition to UNDER_CALIBRATION
+            assertEquals(OperationalState.UNDER_CALIBRATION, node.getState());
+
+            // Clean up: interrupt the sleeping thread to end test quickly
+            coordThread.interrupt();
+            coordThread.join();
+        } finally {
+            mockServer.shutdown();
+            mockServer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
+        }
     }
 }
