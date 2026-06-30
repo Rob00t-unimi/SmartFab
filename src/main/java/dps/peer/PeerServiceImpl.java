@@ -1,5 +1,6 @@
 package dps.peer;
 
+import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;
@@ -59,10 +60,49 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
     @Override
     public void requestCalibration(CalibrationRequest request, StreamObserver<CalibrationReply> responseObserver) {
         try {
-            // Skeleton logic for Commit 2: just respond successfully immediately
-            CalibrationReply reply = CalibrationReply.getDefaultInstance();
-            responseObserver.onNext(reply);
-            responseObserver.onCompleted();
+            int senderId = request.getSenderId();
+            double senderCriticality = request.getCriticality();
+            long senderTimestamp = request.getTimestamp();
+
+            // 1. Update our local Lamport clock upon receiving the message
+            node.updateClockOnReceive(senderTimestamp);
+
+            boolean defer = false;
+
+            synchronized (node) {
+                OperationalState localState = node.getState();
+                int localId = node.getSelf().id();
+
+                if (localState == OperationalState.UNDER_CALIBRATION) {
+                    // We are currently in calibration, so we have the resource. Defer the reply.
+                    defer = true;
+                } else if (localState == OperationalState.WAITING_FOR_CALIBRATION) {
+                    // Both want the resource. Compare priority (criticality then ID)
+                    double localCriticality = (node.getLastCalculatedAverage() - 80.0) / 80.0;
+
+                    if (localCriticality > senderCriticality) {
+                        defer = true;
+                    } else if (localCriticality == senderCriticality) {
+                        if (localId > senderId) {
+                            defer = true;
+                        }
+                    }
+                }
+            }
+
+            if (defer) {
+                // Store the observer in the deferred list
+                node.addDeferredObserver(senderId, responseObserver);
+            } else {
+                // Reply immediately
+                System.out.println("[LINEA " + node.getSelf().id() + "] Replying IMMEDIATELY to calibration request from Node " 
+                        + senderId + " (Clock: " + senderTimestamp + ", Criticality: " + String.format("%.4f", senderCriticality) + ")");
+
+                CalibrationReply reply = CalibrationReply.getDefaultInstance();
+                responseObserver.onNext(reply);
+                responseObserver.onCompleted();
+            }
+
         } catch (Exception e) {
             responseObserver.onError(io.grpc.Status.INTERNAL
                     .withDescription("Internal error during calibration request: " + e.getMessage())

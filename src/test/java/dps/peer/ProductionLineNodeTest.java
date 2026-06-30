@@ -2,6 +2,9 @@ package dps.peer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.peer.proto.CalibrationRequest;
+import dps.peer.proto.CalibrationReply;
+import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -236,5 +239,110 @@ public class ProductionLineNodeTest {
         // Update clock on receive: max(11, 5) + 1 = 12
         node.updateClockOnReceive(5);
         assertEquals(12, node.getLogicalClock());
+    }
+
+    @Test
+    public void testCalibrationRequestPriorityHandling() {
+        ProductionLine self = new ProductionLine(2, "127.0.0.1", 5002);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+        PeerServiceImpl service = new PeerServiceImpl(node);
+
+        // Case 1: Node is FULLY_OPERATIONAL. Should reply immediately.
+        node.setState(OperationalState.FULLY_OPERATIONAL);
+
+        final AtomicBoolean replied1 = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer1 = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied1.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+
+        CalibrationRequest request1 = CalibrationRequest.newBuilder()
+                .setSenderId(1)
+                .setCriticality(0.5)
+                .setTimestamp(5)
+                .build();
+
+        service.requestCalibration(request1, observer1);
+        assertTrue(replied1.get(), "Should reply immediately when FULLY_OPERATIONAL");
+
+        // Case 2: Node is UNDER_CALIBRATION. Should defer.
+        node.setState(OperationalState.UNDER_CALIBRATION);
+        final AtomicBoolean replied2 = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer2 = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied2.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        service.requestCalibration(request1, observer2);
+        assertFalse(replied2.get(), "Should defer reply when UNDER_CALIBRATION");
+        assertEquals(1, node.getAndClearDeferredObservers().size());
+
+        // Case 3: Node is WAITING_FOR_CALIBRATION.
+        // Local node (ID 2): average = 90 (criticality = (90-80)/80 = 0.125)
+        node.setState(OperationalState.WAITING_FOR_CALIBRATION);
+        node.setLastCalculatedAverage(90.0);
+
+        // Subcase 3a: Sender (ID 3) has higher criticality (0.5 > 0.125). Node 2 should reply immediately.
+        final AtomicBoolean replied3a = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3a = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3a.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3a = CalibrationRequest.newBuilder()
+                .setSenderId(3)
+                .setCriticality(0.5)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3a, observer3a);
+        assertTrue(replied3a.get(), "Should reply immediately when sender has higher criticality");
+
+        // Subcase 3b: Sender (ID 1) has lower criticality (0.05 < 0.125). Node 2 should defer.
+        final AtomicBoolean replied3b = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3b = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3b.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3b = CalibrationRequest.newBuilder()
+                .setSenderId(1)
+                .setCriticality(0.05)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3b, observer3b);
+        assertFalse(replied3b.get(), "Should defer when local criticality is higher");
+
+        // Subcase 3c: Same criticality (0.125 == 0.125). Tie-breaker on highest ID.
+        // Node 2 has ID 2. Sender has ID 1. Node 2 has higher ID (highest priority), so Node 2 should defer.
+        final AtomicBoolean replied3c = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3c = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3c.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3c = CalibrationRequest.newBuilder()
+                .setSenderId(1)
+                .setCriticality(0.125)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3c, observer3c);
+        assertFalse(replied3c.get(), "Should defer when local ID is higher (criticality tie-breaker)");
+
+        // Subcase 3d: Same criticality (0.125 == 0.125).
+        // Node 2 has ID 2. Sender has ID 3. Sender has higher ID (highest priority), so Node 2 should reply immediately.
+        final AtomicBoolean replied3d = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3d = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3d.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3d = CalibrationRequest.newBuilder()
+                .setSenderId(3)
+                .setCriticality(0.125)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3d, observer3d);
+        assertTrue(replied3d.get(), "Should reply immediately when sender has higher ID (criticality tie-breaker)");
     }
 }
