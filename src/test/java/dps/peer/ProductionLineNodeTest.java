@@ -161,4 +161,31 @@ public class ProductionLineNodeTest {
         assertNotNull(node.getSensor());
         assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
     }
+
+    @Test
+    public void testMonitoringLoopCalculatesAverageWithoutTransition() throws InterruptedException {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // Start monitoring loop
+        node.startMonitoring();
+        node.getSensor().pauseMeasuring();
+        node.getBuffer().clear();
+
+        // Feed 8 measurements with values > 80.0
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 8; i++) {
+            node.getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 90.0, now + i));
+        }
+
+        // Wait for consumer thread to consume and calculate
+        Thread.sleep(300);
+
+        // Verify that the state remains FULLY_OPERATIONAL since threshold logic is not active in Commit 2
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        node.stopMonitoring();
+    }
 }

@@ -13,6 +13,7 @@ import io.grpc.ServerBuilder;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import sensor.Measurement;
 import sensor.MonitoringSensor;
 
 import java.io.IOException;
@@ -36,10 +37,13 @@ public class ProductionLineNode {
     
     private Server grpcServer;
 
-    // Sensor and state properties (Lab 6 - Commit 1)
+    // Sensor and state properties (Lab 6)
     private final SlidingWindowBuffer buffer = new SlidingWindowBuffer();
     private final MonitoringSensor sensor = new MonitoringSensor(buffer);
     private OperationalState state = OperationalState.FULLY_OPERATIONAL;
+
+    private Thread monitoringThread;
+    private volatile boolean running = true;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
@@ -67,6 +71,9 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
+            // 4. Start monitoring sensor and window consumer loop (Lab 6 - Commit 2)
+            node.startMonitoring();
+
             System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
             
             // Block until JVM is terminated
@@ -80,12 +87,14 @@ public class ProductionLineNode {
             System.err.println("Startup Failed: " + e.getMessage());
             if (node != null) {
                 node.stopGrpcServer();
+                node.stopMonitoring();
             }
             System.exit(1);
         } catch (Exception e) {
             System.err.println("Unexpected Error: " + e.getMessage());
             if (node != null) {
                 node.stopGrpcServer();
+                node.stopMonitoring();
             }
             System.exit(1);
         }
@@ -137,8 +146,9 @@ public class ProductionLineNode {
 
         // Add a shutdown hook to stop the gRPC server when JVM shuts down
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("[LINEA " + self.id() + "] Shutdown hook triggered. Stopping gRPC server...");
+            System.out.println("[LINEA " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
             ProductionLineNode.this.stopGrpcServer();
+            ProductionLineNode.this.stopMonitoring();
         }));
     }
 
@@ -263,6 +273,69 @@ public class ProductionLineNode {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * Starts the physical sensor simulator and the background thread that consumes
+     * measurements from the sliding window buffer.
+     */
+    public synchronized void startMonitoring() {
+        if (monitoringThread != null) {
+            return;
+        }
+
+        running = true;
+        sensor.startMeasuring();
+        System.out.println("[LINEA " + self.id() + "] Physical sensor simulator started.");
+
+        monitoringThread = new Thread(() -> {
+            while (running) {
+                try {
+                    // Block until 8 measurements are ready (50% overlap step on subsequent reads)
+                    List<Measurement> window = buffer.readAllAndClear();
+                    if (window.isEmpty()) {
+                        continue;
+                    }
+
+                    // Compute window average
+                    double sum = 0;
+                    for (Measurement m : window) {
+                        sum += m.value();
+                    }
+                    double average = sum / window.size();
+
+                    System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
+                            + String.format("%.2f", average) + " (Soglia: 80.0)");
+
+                } catch (Exception e) {
+                    if (!running) {
+                        break;
+                    }
+                    System.err.println("[LINEA " + self.id() + "] Error in sensor monitoring loop: " + e.getMessage());
+                }
+            }
+        });
+        monitoringThread.setName("Sensor-Monitoring-Loop-Node-" + self.id());
+        monitoringThread.start();
+    }
+
+    /**
+     * Stops the sensor simulator and shuts down the background monitoring thread.
+     */
+    public synchronized void stopMonitoring() {
+        running = false;
+        sensor.stopMeasuring();
+        buffer.clear(); // Wake up wait() blocks inside SlidingWindowBuffer
+        if (monitoringThread != null) {
+            monitoringThread.interrupt();
+            try {
+                monitoringThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            monitoringThread = null;
+        }
+        System.out.println("[LINEA " + self.id() + "] Sensor monitoring loop stopped.");
     }
 
     public synchronized OperationalState getState() {
