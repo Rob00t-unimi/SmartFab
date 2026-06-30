@@ -345,4 +345,26 @@ public class ProductionLineNodeTest {
         service.requestCalibration(request3d, observer3d);
         assertTrue(replied3d.get(), "Should reply immediately when sender has higher ID (criticality tie-breaker)");
     }
+
+    @Test
+    public void testRequestCalibrationClientBroadcast() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        // Add a mock peer
+        ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
+        node.addPeer(peer);
+
+        assertEquals(0, node.getLogicalClock());
+        assertEquals(0, node.getRepliesReceived());
+
+        // Perform request broadcast
+        node.requestCalibration(90.0);
+
+        // Assert logical clock incremented
+        assertEquals(1, node.getLogicalClock());
+
+        // Since the peer is offline, the exception is caught, and it fallback-increments the reply counter
+        assertEquals(1, node.getRepliesReceived());
+    }
 }

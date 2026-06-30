@@ -51,6 +51,9 @@ public class ProductionLineNode {
     private long logicalClock = 0;
     private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();
     private double lastCalculatedAverage = 0.0;
+    
+    // Reply count tracking (Lab 6 - Feature 3 Commit 1)
+    private int repliesReceived = 0;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
@@ -369,6 +372,84 @@ public class ProductionLineNode {
         // TODO: In Feature 3, we will trigger the Ricart-Agrawala calibration request here
     }
 
+    /**
+     * Sends a gRPC request for calibration to all active peers in parallel.
+     */
+    public void requestCalibration(double averageVibration) {
+        List<ProductionLine> currentPeers = getPeers();
+
+        long requestTimestamp;
+        double requestCriticality;
+
+        synchronized (this) {
+            incrementClock();
+            requestTimestamp = getLogicalClock();
+            requestCriticality = (averageVibration - 80.0) / 80.0;
+            resetRepliesReceived();
+        }
+
+        if (currentPeers.isEmpty()) {
+            System.out.println("[LINEA " + self.id() + "] No peers in topology. No replies needed.");
+            return;
+        }
+
+        System.out.println("[LINEA " + self.id() + "] Requesting calibration from " + currentPeers.size() 
+                + " peer(s) in parallel (Clock: " + requestTimestamp 
+                + ", Criticality: " + String.format("%.4f", requestCriticality) + ")...");
+
+        ExecutorService executor = Executors.newCachedThreadPool();
+
+        for (ProductionLine peer : currentPeers) {
+            executor.submit(() -> {
+                ManagedChannel channel = null;
+                try {
+                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
+                            .usePlaintext()
+                            .build();
+
+                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
+
+                    dps.peer.proto.CalibrationRequest request = dps.peer.proto.CalibrationRequest.newBuilder()
+                            .setSenderId(self.id())
+                            .setCriticality(requestCriticality)
+                            .setTimestamp(requestTimestamp)
+                            .build();
+
+                    // Timeout of 5 seconds for reply response
+                    stub.withDeadlineAfter(5, TimeUnit.SECONDS).requestCalibration(request);
+
+                    // Reply received successfully
+                    incrementRepliesReceived();
+                    System.out.println("[LINEA " + self.id() + "] Received CalibrationReply from Node " + peer.id());
+
+                } catch (Exception e) {
+                    System.err.println("[LINEA " + self.id() + "] ❌ Failed to get CalibrationReply from Node " 
+                            + peer.id() + " - Error: " + e.getMessage());
+                    // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
+                    incrementRepliesReceived();
+                } finally {
+                    if (channel != null) {
+                        try {
+                            channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+            });
+        }
+
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(6, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     public synchronized OperationalState getState() {
         return state;
     }
@@ -415,6 +496,20 @@ public class ProductionLineNode {
 
     public synchronized void setLastCalculatedAverage(double average) {
         this.lastCalculatedAverage = average;
+    }
+
+    // Reply tracking methods (Lab 6 - Feature 3 Commit 1)
+    public synchronized void incrementRepliesReceived() {
+        repliesReceived++;
+        notifyAll(); // Wake up thread waiting for replies
+    }
+
+    public synchronized int getRepliesReceived() {
+        return repliesReceived;
+    }
+
+    public synchronized void resetRepliesReceived() {
+        repliesReceived = 0;
     }
 
     public ProductionLine getSelf() {
