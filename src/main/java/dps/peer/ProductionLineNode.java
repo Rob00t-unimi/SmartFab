@@ -1,14 +1,18 @@
 package dps.peer;
 
 import dps.common.model.ProductionLine;
+import io.grpc.Server;
+import io.grpc.ServerBuilder;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class ProductionLineNode {
 
@@ -19,6 +23,8 @@ public class ProductionLineNode {
 
     private final ProductionLine self;
     private final String serverUrl;
+    
+    private Server grpcServer;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
@@ -29,17 +35,24 @@ public class ProductionLineNode {
     }
 
     public static void main(String[] args) {
+        ProductionLineNode node = null;
         try {
             NodeConfig config = parseArgs(args);
-            ProductionLineNode node = new ProductionLineNode(config.self(), config.serverUrl());
+            node = new ProductionLineNode(config.self(), config.serverUrl());
 
             System.out.println("Starting Production Line Node " + node.getSelf().id() + " on " + node.getSelf().ip() + ":" + node.getSelf().port());
             System.out.println("Admin Server URL: " + node.getServerUrl());
 
-            // REST Registration
+            // 1. Start gRPC Server first so that peers can reach us as soon as we register
+            node.startGrpcServer();
+
+            // 2. REST Registration
             node.registerWithAdminServer();
 
-            // Next step: start gRPC server and sensor loop
+            System.out.println("Node " + node.getSelf().id() + " is running. Press Ctrl+C to exit.");
+            
+            // Block until JVM is terminated
+            node.blockUntilShutdown();
 
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
@@ -47,6 +60,15 @@ public class ProductionLineNode {
             System.exit(1);
         } catch (IllegalStateException e) {
             System.err.println("Startup Failed: " + e.getMessage());
+            if (node != null) {
+                node.stopGrpcServer();
+            }
+            System.exit(1);
+        } catch (Exception e) {
+            System.err.println("Unexpected Error: " + e.getMessage());
+            if (node != null) {
+                node.stopGrpcServer();
+            }
             System.exit(1);
         }
     }
@@ -78,6 +100,56 @@ public class ProductionLineNode {
         ProductionLine self = new ProductionLine(id, ip, port);
 
         return new NodeConfig(self, serverUrl);
+    }
+
+    /**
+     * Starts the local gRPC Server on the configured port.
+     */
+    public synchronized void startGrpcServer() throws IOException {
+        if (grpcServer != null) {
+            return;
+        }
+
+        grpcServer = ServerBuilder.forPort(self.port())
+                .addService(new PeerServiceImpl(this))
+                .build()
+                .start();
+
+        System.out.println("Node " + self.id() + ": gRPC server started, listening on port " + self.port());
+
+        // Add a shutdown hook to stop the gRPC server when JVM shuts down
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("Shutdown hook triggered for node " + self.id() + ". Stopping gRPC server...");
+            ProductionLineNode.this.stopGrpcServer();
+        }));
+    }
+
+    /**
+     * Gracefully stops the local gRPC Server.
+     */
+    public synchronized void stopGrpcServer() {
+        if (grpcServer != null) {
+            grpcServer.shutdown();
+            try {
+                if (!grpcServer.awaitTermination(3, TimeUnit.SECONDS)) {
+                    grpcServer.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                grpcServer.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            grpcServer = null;
+            System.out.println("Node " + self.id() + ": gRPC server stopped.");
+        }
+    }
+
+    /**
+     * Blocks the thread until the gRPC server is terminated.
+     */
+    public void blockUntilShutdown() throws InterruptedException {
+        if (grpcServer != null) {
+            grpcServer.awaitTermination();
+        }
     }
 
     /**

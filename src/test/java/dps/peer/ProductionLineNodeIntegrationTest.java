@@ -2,11 +2,15 @@ package dps.peer;
 
 import dps.common.model.ProductionLine;
 import dps.adminServer.ProductionLineRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.annotation.DirtiesContext;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,13 +24,34 @@ public class ProductionLineNodeIntegrationTest {
     @Autowired
     private ProductionLineRegistry registry;
 
+    private final List<ProductionLineNode> startedNodes = new ArrayList<>();
+
+    @AfterEach
+    public void tearDown() {
+        for (ProductionLineNode node : startedNodes) {
+            try {
+                node.stopGrpcServer();
+            } catch (Exception e) {
+                // Ignore failure during shutdown of single test server
+            }
+        }
+        startedNodes.clear();
+    }
+
+    private ProductionLineNode createAndStartNode(ProductionLine self, String serverUrl) throws Exception {
+        ProductionLineNode node = new ProductionLineNode(self, serverUrl);
+        node.startGrpcServer();
+        startedNodes.add(node);
+        return node;
+    }
+
     @Test
-    public void testEndToEndRegistration() {
+    public void testEndToEndRegistration() throws Exception {
         String serverUrl = "http://localhost:" + port;
 
         // Register Node 1
         ProductionLine self1 = new ProductionLine(1, "127.0.0.1", 5001);
-        ProductionLineNode node1 = new ProductionLineNode(self1, serverUrl);
+        ProductionLineNode node1 = createAndStartNode(self1, serverUrl);
 
         assertEquals(0, node1.getPeerCount());
         node1.registerWithAdminServer();
@@ -36,7 +61,7 @@ public class ProductionLineNodeIntegrationTest {
 
         // Register Node 2
         ProductionLine self2 = new ProductionLine(2, "127.0.0.1", 5002);
-        ProductionLineNode node2 = new ProductionLineNode(self2, serverUrl);
+        ProductionLineNode node2 = createAndStartNode(self2, serverUrl);
 
         assertEquals(0, node2.getPeerCount());
         node2.registerWithAdminServer();
