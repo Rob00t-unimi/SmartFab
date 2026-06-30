@@ -1,5 +1,6 @@
 package dps.peer;
 
+import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
@@ -12,6 +13,7 @@ import io.grpc.ServerBuilder;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import sensor.MonitoringSensor;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -33,6 +35,11 @@ public class ProductionLineNode {
     private final String serverUrl;
     
     private Server grpcServer;
+
+    // Sensor and state properties (Lab 6 - Commit 1)
+    private final SlidingWindowBuffer buffer = new SlidingWindowBuffer();
+    private final MonitoringSensor sensor = new MonitoringSensor(buffer);
+    private OperationalState state = OperationalState.FULLY_OPERATIONAL;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
@@ -256,6 +263,22 @@ public class ProductionLineNode {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+    }
+
+    public synchronized OperationalState getState() {
+        return state;
+    }
+
+    public synchronized void setState(OperationalState state) {
+        this.state = state;
+    }
+
+    public SlidingWindowBuffer getBuffer() {
+        return buffer;
+    }
+
+    public MonitoringSensor getSensor() {
+        return sensor;
     }
 
     public ProductionLine getSelf() {

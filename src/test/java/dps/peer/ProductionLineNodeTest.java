@@ -1,5 +1,6 @@
 package dps.peer;
 
+import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import org.junit.jupiter.api.Test;
 
@@ -149,5 +150,15 @@ public class ProductionLineNodeTest {
         // Count should be exactly half of the threads that didn't get removed (id % 2 != 0)
         // Which is threadCount / 2 = 50 peers remaining.
         assertEquals(50, node.getPeerCount());
+    }
+
+    @Test
+    public void testInitialState() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertNotNull(node.getBuffer());
+        assertNotNull(node.getSensor());
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
     }
 }
