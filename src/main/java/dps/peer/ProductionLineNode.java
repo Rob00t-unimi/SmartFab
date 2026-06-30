@@ -45,6 +45,11 @@ public class ProductionLineNode {
     private Thread monitoringThread;
     private volatile boolean running = true;
 
+    // Ricart-Agrawala variables (Lab 6 - Commit 2)
+    private long logicalClock = 0;
+    private final List<Integer> deferredReplies = new ArrayList<>();
+    private double lastCalculatedAverage = 0.0;
+
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
             throw new IllegalArgumentException("ProductionLine identity cannot be null.");
@@ -71,7 +76,7 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            // 4. Start monitoring sensor and window consumer loop (Lab 6)
+            // 4. Start monitoring sensor and window consumer loop
             node.startMonitoring();
 
             System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
@@ -303,11 +308,14 @@ public class ProductionLineNode {
                         sum += m.value();
                     }
                     double average = sum / window.size();
+                    
+                    // Track average value for criticality calculation (Lab 6)
+                    setLastCalculatedAverage(average);
 
                     System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
                             + String.format("%.2f", average) + " (Soglia: 80.0)");
 
-                    // Check if threshold exceeded to trigger calibration transition (Lab 6 - Commit 3)
+                    // Check if threshold exceeded to trigger calibration transition
                     if (average > 80.0 && getState() == OperationalState.FULLY_OPERATIONAL) {
                         transitionToWaitingForCalibration(average);
                     }
@@ -373,6 +381,37 @@ public class ProductionLineNode {
 
     public MonitoringSensor getSensor() {
         return sensor;
+    }
+
+    // Thread-safe Lamport clock and RA helper methods (Lab 6 - Commit 2)
+    public synchronized long getLogicalClock() {
+        return logicalClock;
+    }
+
+    public synchronized void incrementClock() {
+        logicalClock++;
+    }
+
+    public synchronized void updateClockOnReceive(long receivedTime) {
+        logicalClock = Math.max(logicalClock, receivedTime) + 1;
+    }
+
+    public synchronized void addDeferredReply(int peerId) {
+        deferredReplies.add(peerId);
+    }
+
+    public synchronized List<Integer> getAndClearDeferredReplies() {
+        List<Integer> copy = new ArrayList<>(deferredReplies);
+        deferredReplies.clear();
+        return copy;
+    }
+
+    public synchronized double getLastCalculatedAverage() {
+        return lastCalculatedAverage;
+    }
+
+    public synchronized void setLastCalculatedAverage(double average) {
+        this.lastCalculatedAverage = average;
     }
 
     public ProductionLine getSelf() {

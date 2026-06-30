@@ -218,4 +218,23 @@ public class ProductionLineNodeTest {
         // Cleanup
         node.stopMonitoring();
     }
+
+    @Test
+    public void testLogicalClockUpdates() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(0, node.getLogicalClock());
+
+        node.incrementClock();
+        assertEquals(1, node.getLogicalClock());
+
+        // Update clock on receive: max(1, 10) + 1 = 11
+        node.updateClockOnReceive(10);
+        assertEquals(11, node.getLogicalClock());
+
+        // Update clock on receive: max(11, 5) + 1 = 12
+        node.updateClockOnReceive(5);
+        assertEquals(12, node.getLogicalClock());
+    }
 }
