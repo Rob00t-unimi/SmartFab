@@ -1,6 +1,12 @@
 package dps.peer;
 
 import dps.common.model.ProductionLine;
+import dps.peer.proto.NodeIdentity;
+import dps.peer.proto.PeerServiceGrpc;
+import dps.peer.proto.PresentationRequest;
+import dps.peer.proto.PresentationResponse;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import org.springframework.web.client.HttpClientErrorException;
@@ -12,6 +18,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class ProductionLineNode {
@@ -48,6 +56,9 @@ public class ProductionLineNode {
 
             // 2. REST Registration
             node.registerWithAdminServer();
+
+            // 3. gRPC Presentation to all registered peers in parallel
+            node.presentSelfToPeers();
 
             System.out.println("Node " + node.getSelf().id() + " is running. Press Ctrl+C to exit.");
             
@@ -176,6 +187,74 @@ public class ProductionLineNode {
             throw new IllegalStateException("Connection failed: Admin Server is offline or unreachable at " + url);
         } catch (Exception e) {
             throw new IllegalStateException("Registration failed due to unexpected error: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Broadcasts a gRPC presentation request in parallel to all currently known peers.
+     */
+    public void presentSelfToPeers() {
+        List<ProductionLine> currentPeers = getPeers();
+        if (currentPeers.isEmpty()) {
+            System.out.println("Node " + self.id() + ": no peers to present to.");
+            return;
+        }
+
+        System.out.println("Node " + self.id() + ": presenting to " + currentPeers.size() + " peer(s) in parallel...");
+
+        // P2P broadcasts must be done in parallel. We use CachedThreadPool.
+        ExecutorService executor = Executors.newCachedThreadPool();
+
+        for (ProductionLine peer : currentPeers) {
+            executor.submit(() -> {
+                ManagedChannel channel = null;
+                try {
+                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
+                            .usePlaintext()
+                            .build();
+
+                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
+
+                    NodeIdentity identity = NodeIdentity.newBuilder()
+                            .setId(self.id())
+                            .setIp(self.ip())
+                            .setPort(self.port())
+                            .build();
+
+                    PresentationRequest request = PresentationRequest.newBuilder()
+                            .setSender(identity)
+                            .build();
+
+                    // Timeout of 3 seconds for presentation response
+                    PresentationResponse response = stub.withDeadlineAfter(3, TimeUnit.SECONDS).present(request);
+                    if (response.getAccepted()) {
+                        System.out.println("Node " + self.id() + ": successfully presented to peer " + peer.id());
+                    } else {
+                        System.out.println("Node " + self.id() + ": peer " + peer.id() + " rejected presentation.");
+                    }
+
+                } catch (Exception e) {
+                    System.err.println("Node " + self.id() + ": failed to present to peer " + peer.id() + " - " + e.getMessage());
+                } finally {
+                    if (channel != null) {
+                        try {
+                            channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+            });
+        }
+
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
