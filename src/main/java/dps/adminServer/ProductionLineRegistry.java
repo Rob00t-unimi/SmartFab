@@ -61,6 +61,7 @@ public class ProductionLineRegistry {
      */
     public synchronized List<ProductionLine> register(ProductionLine newLine) {
         if (lineDataMap.containsKey(newLine.id())) {
+            System.err.println("[ADMIN_SERVER] Registration CONFLICT: Node with ID " + newLine.id() + " is already registered.");
             throw new IllegalArgumentException("Production Line with ID " + newLine.id() + " is already registered.");
         }
         
@@ -72,6 +73,10 @@ public class ProductionLineRegistry {
 
         // Add the new line
         lineDataMap.put(newLine.id(), new ProductionLineData(newLine));
+        
+        System.out.println("[ADMIN_SERVER] Registered new Production Line: ID " + newLine.id() + " on " + newLine.ip() + ":" + newLine.port());
+        System.out.println("[ADMIN_SERVER] Returning list of " + peers.size() + " active peer(s) to Node " + newLine.id());
+        
         return peers;
     }
 
@@ -105,6 +110,9 @@ public class ProductionLineRegistry {
         if (data != null) {
             // Locking only the specific line
             data.updateState(state);
+            System.out.println("[ADMIN_SERVER] Updated state for Node " + id + " to: " + state);
+        } else {
+            System.err.println("[ADMIN_SERVER] State update failed: Node " + id + " not found in registry.");
         }
     }
 
@@ -119,6 +127,9 @@ public class ProductionLineRegistry {
         if (data != null) {
             // Locking only the specific line
             data.addTelemetry(average, timestamp);
+            System.out.println("[ADMIN_SERVER] Added telemetry for Node " + id + ": average vibration = " + average);
+        } else {
+            System.err.println("[ADMIN_SERVER] Telemetry update failed: Node " + id + " not found in registry.");
         }
     }
 
@@ -134,6 +145,7 @@ public class ProductionLineRegistry {
         }
 
         if (data == null) {
+            System.err.println("[ADMIN_SERVER] Stats query failed: Node " + id + " not found.");
             throw new NoSuchElementException("Production Line with ID " + id + " not found.");
         }
 
@@ -149,7 +161,12 @@ public class ProductionLineRegistry {
                 count++;
             }
         }
-        return count == 0 ? 0.0 : sum / count;
+        double avg = count == 0 ? 0.0 : sum / count;
+        
+        System.out.println("[ADMIN_SERVER] Stats queried for Node " + id + " between " + t1 + " and " + t2 
+                + ". Found " + count + " entries. Average: " + avg);
+        
+        return avg;
     }
 
     /**

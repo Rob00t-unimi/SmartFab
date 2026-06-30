@@ -48,8 +48,8 @@ public class ProductionLineNode {
             NodeConfig config = parseArgs(args);
             node = new ProductionLineNode(config.self(), config.serverUrl());
 
-            System.out.println("Starting Production Line Node " + node.getSelf().id() + " on " + node.getSelf().ip() + ":" + node.getSelf().port());
-            System.out.println("Admin Server URL: " + node.getServerUrl());
+            System.out.println("[LINEA " + node.getSelf().id() + "] Starting node on " + node.getSelf().ip() + ":" + node.getSelf().port());
+            System.out.println("[LINEA " + node.getSelf().id() + "] Admin Server URL: " + node.getServerUrl());
 
             // 1. Start gRPC Server first so that peers can reach us as soon as we register
             node.startGrpcServer();
@@ -60,7 +60,7 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            System.out.println("Node " + node.getSelf().id() + " is running. Press Ctrl+C to exit.");
+            System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
             
             // Block until JVM is terminated
             node.blockUntilShutdown();
@@ -126,11 +126,11 @@ public class ProductionLineNode {
                 .build()
                 .start();
 
-        System.out.println("Node " + self.id() + ": gRPC server started, listening on port " + self.port());
+        System.out.println("[LINEA " + self.id() + "] gRPC server started, listening on port " + self.port());
 
         // Add a shutdown hook to stop the gRPC server when JVM shuts down
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("Shutdown hook triggered for node " + self.id() + ". Stopping gRPC server...");
+            System.out.println("[LINEA " + self.id() + "] Shutdown hook triggered. Stopping gRPC server...");
             ProductionLineNode.this.stopGrpcServer();
         }));
     }
@@ -150,7 +150,7 @@ public class ProductionLineNode {
                 Thread.currentThread().interrupt();
             }
             grpcServer = null;
-            System.out.println("Node " + self.id() + ": gRPC server stopped.");
+            System.out.println("[LINEA " + self.id() + "] gRPC server stopped.");
         }
     }
 
@@ -179,7 +179,7 @@ public class ProductionLineNode {
                 for (ProductionLine peer : response) {
                     addPeer(peer);
                 }
-                System.out.println("Node " + self.id() + " registered successfully. Loaded " + response.length + " peer(s) from registry.");
+                System.out.println("[LINEA " + self.id() + "] REST registration successful. Loaded " + response.length + " peer(s) from Admin Server.");
             }
         } catch (HttpClientErrorException.Conflict e) {
             throw new IllegalStateException("Registration conflict: Node with ID " + self.id() + " is already registered.");
@@ -196,11 +196,11 @@ public class ProductionLineNode {
     public void presentSelfToPeers() {
         List<ProductionLine> currentPeers = getPeers();
         if (currentPeers.isEmpty()) {
-            System.out.println("Node " + self.id() + ": no peers to present to.");
+            System.out.println("[LINEA " + self.id() + "] No existing peers to present to in local network view.");
             return;
         }
 
-        System.out.println("Node " + self.id() + ": presenting to " + currentPeers.size() + " peer(s) in parallel...");
+        System.out.println("[LINEA " + self.id() + "] Sending gRPC presentation requests to " + currentPeers.size() + " peer(s) in parallel...");
 
         // P2P broadcasts must be done in parallel. We use CachedThreadPool.
         ExecutorService executor = Executors.newCachedThreadPool();
@@ -228,13 +228,13 @@ public class ProductionLineNode {
                     // Timeout of 3 seconds for presentation response
                     PresentationResponse response = stub.withDeadlineAfter(3, TimeUnit.SECONDS).present(request);
                     if (response.getAccepted()) {
-                        System.out.println("Node " + self.id() + ": successfully presented to peer " + peer.id());
+                        System.out.println("[LINEA " + self.id() + "] gRPC presentation ACCEPTED by Node " + peer.id());
                     } else {
-                        System.out.println("Node " + self.id() + ": peer " + peer.id() + " rejected presentation.");
+                        System.out.println("[LINEA " + self.id() + "] ⚠️ gRPC presentation REJECTED by Node " + peer.id());
                     }
 
                 } catch (Exception e) {
-                    System.err.println("Node " + self.id() + ": failed to present to peer " + peer.id() + " - " + e.getMessage());
+                    System.err.println("[LINEA " + self.id() + "] ❌ gRPC presentation FAILED to Node " + peer.id() + " - Error: " + e.getMessage());
                 } finally {
                     if (channel != null) {
                         try {

@@ -29,11 +29,11 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                     senderIdentity.getPort()
             );
 
-            // Add the new peer to local thread-safe topology registry
+            // Add the new peer to our local thread-safe topology registry
             node.addPeer(newPeer);
 
-            System.out.println("Node " + node.getSelf().id() + ": accepted presentation from new peer: "
-                    + newPeer.id() + " (" + newPeer.ip() + ":" + newPeer.port() + ")");
+            System.out.println("[LINEA " + node.getSelf().id() + "] Received gRPC presentation request from Node " 
+                    + newPeer.id() + " (" + newPeer.ip() + ":" + newPeer.port() + "). Adding to local topology.");
 
             // Respond back indicating acceptance
             PresentationResponse response = PresentationResponse.newBuilder()
