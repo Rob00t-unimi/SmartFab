@@ -1,5 +1,6 @@
 package dps.peer;
 
+import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import org.junit.jupiter.api.Test;
 
@@ -149,5 +150,72 @@ public class ProductionLineNodeTest {
         // Count should be exactly half of the threads that didn't get removed (id % 2 != 0)
         // Which is threadCount / 2 = 50 peers remaining.
         assertEquals(50, node.getPeerCount());
+    }
+
+    @Test
+    public void testInitialState() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertNotNull(node.getBuffer());
+        assertNotNull(node.getSensor());
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+    }
+
+    @Test
+    public void testMonitoringLoopCalculatesAverageWithoutTransition() throws InterruptedException {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // Start monitoring loop
+        node.startMonitoring();
+        node.getSensor().pauseMeasuring();
+        node.getBuffer().clear();
+
+        // Feed 8 measurements with values > 80.0
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 8; i++) {
+            node.getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 50.0, now + i));
+        }
+
+        // Wait for consumer thread to consume and calculate
+        Thread.sleep(300);
+
+        // Verify that the state remains FULLY_OPERATIONAL since threshold logic is not active in Commit 2
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        node.stopMonitoring();
+    }
+
+    @Test
+    public void testMonitoringLoopThresholdExceeded() throws InterruptedException {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // Start monitoring
+        node.startMonitoring();
+
+        // Pause the physical sensor so it doesn't write noise measurements concurrently
+        node.getSensor().pauseMeasuring();
+        node.getBuffer().clear();
+
+        // Feed 8 measurements with values > 80.0 to trigger the threshold
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 8; i++) {
+            node.getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 90.0, now + i));
+        }
+
+        // Give the background monitoring thread a moment to consume and process the window
+        Thread.sleep(300);
+
+        // Assert that the state transitioned to WAITING_FOR_CALIBRATION
+        assertEquals(OperationalState.WAITING_FOR_CALIBRATION, node.getState());
+
+        // Cleanup
+        node.stopMonitoring();
     }
 }
