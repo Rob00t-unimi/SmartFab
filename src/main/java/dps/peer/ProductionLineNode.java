@@ -369,7 +369,11 @@ public class ProductionLineNode {
         sensor.pauseMeasuring();
         buffer.clear();
 
-        // TODO: In Feature 3, we will trigger the Ricart-Agrawala calibration request here
+        // Asynchronously coordinate the calibration sequence in a separate thread (Lab 6 - Commit 3)
+        new Thread(() -> {
+            enterCalibrationAndWait();
+            releaseCalibration();
+        }, "Calibration-Coordinator-Thread-Node-" + self.id()).start();
     }
 
     /**
@@ -485,6 +489,35 @@ public class ProductionLineNode {
         }
 
         System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] Calibration execution finished.");
+    }
+
+    /**
+     * Releases the calibration resource, replies to all deferred peer requests,
+     * updates the state to FULLY_OPERATIONAL, and restarts the physical sensor.
+     */
+    public void releaseCalibration() {
+        List<StreamObserver<CalibrationReply>> observers;
+
+        synchronized (this) {
+            setState(OperationalState.FULLY_OPERATIONAL);
+            observers = getAndClearDeferredObservers();
+        }
+
+        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION -> FULLY_OPERATIONAL] Calibration completed. Releasing " 
+                + observers.size() + " deferred replies...");
+
+        for (StreamObserver<CalibrationReply> observer : observers) {
+            try {
+                observer.onNext(CalibrationReply.getDefaultInstance());
+                observer.onCompleted();
+            } catch (Exception e) {
+                System.err.println("[LINEA " + self.id() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
+            }
+        }
+
+        // Restart physical sensor measuring loop
+        sensor.startMeasuring();
+        System.out.println("[LINEA " + self.id() + "] Physical sensor simulator resumed.");
     }
 
     public synchronized OperationalState getState() {

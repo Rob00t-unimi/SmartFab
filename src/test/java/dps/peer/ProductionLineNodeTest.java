@@ -216,8 +216,8 @@ public class ProductionLineNodeTest {
         // Give the background monitoring thread a moment to consume and process the window
         Thread.sleep(300);
 
-        // Assert that the state transitioned to WAITING_FOR_CALIBRATION
-        assertEquals(OperationalState.WAITING_FOR_CALIBRATION, node.getState());
+        // Assert that the state transitioned and started calibration (since peer count is 0, it proceeds directly)
+        assertEquals(OperationalState.UNDER_CALIBRATION, node.getState());
 
         // Cleanup
         node.stopMonitoring();
@@ -349,27 +349,44 @@ public class ProductionLineNodeTest {
 
     @Test
     public void testRequestCalibrationClientBroadcast() throws Exception {
-        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
-        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+        // Start a mock gRPC server on 5002 that replies immediately
+        io.grpc.Server mockServer = io.grpc.ServerBuilder.forPort(5002)
+                .addService(new PeerServiceGrpc.PeerServiceImplBase() {
+                    @Override
+                    public void requestCalibration(CalibrationRequest request, StreamObserver<CalibrationReply> responseObserver) {
+                        responseObserver.onNext(CalibrationReply.getDefaultInstance());
+                        responseObserver.onCompleted();
+                    }
+                })
+                .build()
+                .start();
 
-        // Add a mock peer
-        ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
-        node.addPeer(peer);
+        try {
+            ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+            ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
-        assertEquals(0, node.getLogicalClock());
-        assertEquals(0, node.getRepliesReceived());
+            // Add the peer pointing to our mock server
+            ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
+            node.addPeer(peer);
 
-        // Perform request broadcast
-        node.requestCalibration(90.0);
+            assertEquals(0, node.getLogicalClock());
+            assertEquals(0, node.getRepliesReceived());
 
-        // Wait for async task to fail and increment counter
-        Thread.sleep(300);
+            // Perform request broadcast
+            node.requestCalibration(90.0);
 
-        // Assert logical clock incremented
-        assertEquals(1, node.getLogicalClock());
+            // Wait a brief moment for the async task to complete
+            Thread.sleep(300);
 
-        // Since the peer is offline, the exception is caught, and it fallback-increments the reply counter
-        assertEquals(1, node.getRepliesReceived());
+            // Assert logical clock incremented
+            assertEquals(1, node.getLogicalClock());
+
+            // Assert reply received successfully
+            assertEquals(1, node.getRepliesReceived());
+        } finally {
+            mockServer.shutdown();
+            mockServer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
+        }
     }
 
     @Test
@@ -423,5 +440,36 @@ public class ProductionLineNodeTest {
             mockServer.shutdown();
             mockServer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
         }
+    }
+
+    @Test
+    public void testReleaseCalibrationResumesAndReplies() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        node.setState(OperationalState.UNDER_CALIBRATION);
+        node.getSensor().pauseMeasuring();
+
+        final AtomicBoolean replied = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> mockObserver = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+
+        // Add to deferred observers
+        node.addDeferredObserver(2, mockObserver);
+
+        // Release calibration
+        node.releaseCalibration();
+
+        // State should transition back to FULLY_OPERATIONAL
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // The deferred reply should be sent
+        assertTrue(replied.get());
+
+        // The deferred queue should be cleared
+        assertEquals(0, node.getAndClearDeferredObservers().size());
     }
 }
