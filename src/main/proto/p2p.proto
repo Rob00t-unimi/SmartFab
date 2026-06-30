@@ -19,6 +19,18 @@ message PresentationResponse {
   bool accepted = 1;
 }
 
+// Lab 6: Ricart-Agrawala Calibration Messages
+message CalibrationRequest {
+  int32 sender_id = 1;
+  double criticality = 2;
+  int64 timestamp = 3; // Lamport logical timestamp
+}
+
+message CalibrationReply {}
+
 service PeerService {
   rpc Present(PresentationRequest) returns (PresentationResponse);
+  
+  // Request access to calibration (mutual exclusion resource coordinator)
+  rpc RequestCalibration(CalibrationRequest) returns (CalibrationReply);
 }

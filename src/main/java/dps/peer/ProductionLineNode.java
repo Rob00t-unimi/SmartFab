@@ -2,6 +2,7 @@ package dps.peer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
 import dps.peer.proto.PresentationRequest;
@@ -10,6 +11,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.stub.StreamObserver;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
@@ -45,6 +47,11 @@ public class ProductionLineNode {
     private Thread monitoringThread;
     private volatile boolean running = true;
 
+    // Ricart-Agrawala variables (Lab 6 - Commit 2 & 3)
+    private long logicalClock = 0;
+    private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();
+    private double lastCalculatedAverage = 0.0;
+
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
             throw new IllegalArgumentException("ProductionLine identity cannot be null.");
@@ -71,7 +78,7 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            // 4. Start monitoring sensor and window consumer loop (Lab 6)
+            // 4. Start monitoring sensor and window consumer loop
             node.startMonitoring();
 
             System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
@@ -303,11 +310,14 @@ public class ProductionLineNode {
                         sum += m.value();
                     }
                     double average = sum / window.size();
+                    
+                    // Track average value for criticality calculation (Lab 6)
+                    setLastCalculatedAverage(average);
 
                     System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
                             + String.format("%.2f", average) + " (Soglia: 80.0)");
 
-                    // Check if threshold exceeded to trigger calibration transition (Lab 6 - Commit 3)
+                    // Check if threshold exceeded to trigger calibration transition
                     if (average > 80.0 && getState() == OperationalState.FULLY_OPERATIONAL) {
                         transitionToWaitingForCalibration(average);
                     }
@@ -373,6 +383,38 @@ public class ProductionLineNode {
 
     public MonitoringSensor getSensor() {
         return sensor;
+    }
+
+    // Thread-safe Lamport clock and RA helper methods (Lab 6 - Commit 2 & 3)
+    public synchronized long getLogicalClock() {
+        return logicalClock;
+    }
+
+    public synchronized void incrementClock() {
+        logicalClock++;
+    }
+
+    public synchronized void updateClockOnReceive(long receivedTime) {
+        logicalClock = Math.max(logicalClock, receivedTime) + 1;
+    }
+
+    public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer) {
+        deferredObservers.put(peerId, observer);
+        System.out.println("[LINEA " + self.id() + "] Deferring reply to Node " + peerId);
+    }
+
+    public synchronized List<StreamObserver<CalibrationReply>> getAndClearDeferredObservers() {
+        List<StreamObserver<CalibrationReply>> observers = new ArrayList<>(deferredObservers.values());
+        deferredObservers.clear();
+        return observers;
+    }
+
+    public synchronized double getLastCalculatedAverage() {
+        return lastCalculatedAverage;
+    }
+
+    public synchronized void setLastCalculatedAverage(double average) {
+        this.lastCalculatedAverage = average;
     }
 
     public ProductionLine getSelf() {
