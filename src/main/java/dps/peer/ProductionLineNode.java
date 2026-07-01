@@ -16,6 +16,9 @@ import io.grpc.stub.StreamObserver;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import sensor.Measurement;
 import sensor.MonitoringSensor;
 
@@ -57,6 +60,10 @@ public class ProductionLineNode {
     // Reply count tracking
     private int repliesReceived = 0;
 
+    // MQTT client configuration
+    private MqttClient mqttClient;
+    private final String mqttBrokerUrl = "tcp://localhost:1883";
+
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         if (self == null) {
             throw new IllegalArgumentException("ProductionLine identity cannot be null.");
@@ -83,7 +90,10 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            // 4. Start monitoring sensor and window consumer loop
+            // 4. Connect to MQTT Broker
+            node.connectMqtt();
+
+            // 5. Start monitoring sensor and window consumer loop
             node.startMonitoring();
 
             System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
@@ -364,7 +374,43 @@ public class ProductionLineNode {
             }
             monitoringThread = null;
         }
+        disconnectMqtt(); // Disconnect MQTT client
         System.out.println("[LINEA " + self.id() + "] Sensor monitoring loop stopped.");
+    }
+
+    /**
+     * Connects to the MQTT Broker
+     */
+    public synchronized void connectMqtt() {
+        try {
+            String clientId = "smartfab-peer-" + self.id();
+            // instantiate client mqtt with eclipse paho.
+            mqttClient = new MqttClient(mqttBrokerUrl, clientId, new MemoryPersistence());  // memory persistence keeps temporary messages not yet sent in RAM instead of in the FS
+            MqttConnectOptions connOpts = new MqttConnectOptions();  // config connection parameters
+            connOpts.setCleanSession(true);
+            
+            System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Connecting to MQTT Broker: " + mqttBrokerUrl + "...");
+            mqttClient.connect(connOpts);   // open connection (wait broker response)
+            System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Connected to MQTT Broker successfully.");
+        } catch (Exception e) {
+            throw new IllegalStateException("MQTT connection failed to broker " + mqttBrokerUrl + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Disconnects from the MQTT Broker
+     */
+    public synchronized void disconnectMqtt() {
+        if (mqttClient != null && mqttClient.isConnected()) {
+            try {
+                System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Disconnecting from MQTT Broker...");
+                mqttClient.disconnect();
+                mqttClient.close();
+                System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Disconnected from MQTT Broker successfully.");
+            } catch (Exception e) {
+                System.err.println("[LINEA " + self.id() + "] ❌ Error disconnecting from MQTT Broker: " + e.getMessage());
+            }
+        }
     }
 
     /**
