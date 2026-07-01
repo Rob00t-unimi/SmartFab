@@ -18,6 +18,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import sensor.Measurement;
 import sensor.MonitoringSensor;
@@ -64,6 +65,10 @@ public class ProductionLineNode {
     private MqttClient mqttClient;
     private final String mqttBrokerUrl;
 
+    // MQTT buffer and publisher thread
+    private final List<Double> localAveragesBuffer = new ArrayList<>();
+    private Thread mqttPublisherThread;
+
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         this(self, serverUrl, "tcp://localhost:1883");
     }
@@ -95,7 +100,7 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            // 4. Connect to MQTT Broker
+            // 4. Connect to MQTT Broker (Lab 7 - Commit 1)
             node.connectMqtt();
 
             // 5. Start monitoring sensor and window consumer loop
@@ -314,7 +319,7 @@ public class ProductionLineNode {
 
     /**
      * Starts the physical sensor simulator and the background thread that consumes
-     * measurements from the sliding window buffer.
+     * measurements from the sliding window buffer. Starts mqtt publishing.
      */
     public synchronized void startMonitoring() {
         if (monitoringThread != null) {
@@ -344,6 +349,11 @@ public class ProductionLineNode {
                     // Track average value for criticality calculation
                     setLastCalculatedAverage(average);
 
+                    // Buffer the average for MQTT telemetry
+                    synchronized (localAveragesBuffer) {
+                        localAveragesBuffer.add(average);
+                    }
+
                     System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
                             + String.format("%.2f", average) + " (Soglia: " + vibrationThreshold + ")");
 
@@ -362,10 +372,13 @@ public class ProductionLineNode {
         });
         monitoringThread.setName("Sensor-Monitoring-Loop-Node-" + self.id());
         monitoringThread.start();   // start the thread
+
+        // Start periodic MQTT telemetry thread
+        startMqttTelemetryPublishing();
     }
 
     /**
-     * Stops the sensor simulator and shuts down the background monitoring thread.
+     * Stops the sensor simulator and shuts down the background monitoring thread and mqtt publisher.
      */
     public synchronized void stopMonitoring() {
         running = false;
@@ -379,6 +392,15 @@ public class ProductionLineNode {
                 Thread.currentThread().interrupt();
             }
             monitoringThread = null;
+        }
+        if (mqttPublisherThread != null) {
+            mqttPublisherThread.interrupt();
+            try {
+                mqttPublisherThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            mqttPublisherThread = null;
         }
         disconnectMqtt(); // Disconnect MQTT client
         System.out.println("[LINEA " + self.id() + "] Sensor monitoring loop stopped.");
@@ -417,6 +439,73 @@ public class ProductionLineNode {
                 System.err.println("[LINEA " + self.id() + "] ❌ Error disconnecting from MQTT Broker: " + e.getMessage());
             }
         }
+    }
+
+    /**
+     * Publishes telemetry payload to the MQTT Broker.
+     */
+    public void publishTelemetry(String payload) {
+        synchronized (this) {
+            if (mqttClient == null || !mqttClient.isConnected()) {
+                System.err.println("[LINEA " + self.id() + "] Cannot publish telemetry: MQTT client not connected.");
+                return;
+            }
+        }
+        try {
+            String topic = "smartfab/production-line/" + self.id() + "/telemetry";
+            MqttMessage message = new MqttMessage(payload.getBytes());
+            message.setQos(1);
+            mqttClient.publish(topic, message);
+        } catch (Exception e) {
+            System.err.println("[LINEA " + self.id() + "] ❌ Error publishing MQTT telemetry: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Starts the periodic thread that publishes collected averages every 10 seconds (Lab 7 - Commit 2).
+     */
+    private void startMqttTelemetryPublishing() {
+        mqttPublisherThread = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(10000); // Wait 10 seconds
+                    
+                    // Extract and clear the local averages buffer thread-safely
+                    List<Double> averagesToPublish;
+                    synchronized (localAveragesBuffer) {
+                        averagesToPublish = new ArrayList<>(localAveragesBuffer);
+                        localAveragesBuffer.clear();
+                    }
+                    
+                    // Construct JSON payload manually
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("{");
+                    sb.append("\"id\":").append(self.id()).append(",");
+                    sb.append("\"averages\":[");
+                    for (int i = 0; i < averagesToPublish.size(); i++) {
+                        sb.append(String.format(java.util.Locale.US, "%.4f", averagesToPublish.get(i)));
+                        if (i < averagesToPublish.size() - 1) {
+                            sb.append(",");
+                        }
+                    }
+                    sb.append("],");
+                    sb.append("\"timestamp\":").append(System.currentTimeMillis()).append(",");
+                    sb.append("\"state\":\"").append(getState().name()).append("\"");
+                    sb.append("}");
+                    
+                    String payload = sb.toString();
+                    publishTelemetry(payload);
+                    
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    System.err.println("[LINEA " + self.id() + "] Error in MQTT telemetry publisher: " + e.getMessage());
+                }
+            }
+        });
+        mqttPublisherThread.setName("MQTT-Telemetry-Publisher-Node-" + self.id());
+        mqttPublisherThread.start();
     }
 
     /**
