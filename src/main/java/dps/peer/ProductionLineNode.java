@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit;
 
 public class ProductionLineNode {
 
-    public record NodeConfig(ProductionLine self, String serverUrl) {}
+    public record NodeConfig(ProductionLine self, String serverUrl, String mqttBrokerUrl) {}
 
     // Map of active peers, manually synchronized on 'this'
     private final Map<Integer, ProductionLine> peers = new HashMap<>();
@@ -62,21 +62,26 @@ public class ProductionLineNode {
 
     // MQTT client configuration
     private MqttClient mqttClient;
-    private final String mqttBrokerUrl = "tcp://localhost:1883";
+    private final String mqttBrokerUrl;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
+        this(self, serverUrl, "tcp://localhost:1883");
+    }
+
+    public ProductionLineNode(ProductionLine self, String serverUrl, String mqttBrokerUrl) {
         if (self == null) {
             throw new IllegalArgumentException("ProductionLine identity cannot be null.");
         }
         this.self = self;
         this.serverUrl = serverUrl;
+        this.mqttBrokerUrl = mqttBrokerUrl;
     }
 
     public static void main(String[] args) {
         ProductionLineNode node = null;
         try {
             NodeConfig config = parseArgs(args);
-            node = new ProductionLineNode(config.self(), config.serverUrl());
+            node = new ProductionLineNode(config.self(), config.serverUrl(), config.mqttBrokerUrl());
 
             System.out.println("[LINEA " + node.getSelf().id() + "] Starting node on " + node.getSelf().ip() + ":" + node.getSelf().port());
             System.out.println("[LINEA " + node.getSelf().id() + "] Admin Server URL: " + node.getServerUrl());
@@ -144,11 +149,12 @@ public class ProductionLineNode {
         }
 
         String serverUrl = args.length >= 4 ? args[3] : "http://localhost:8080";
+        String mqttBrokerUrl = args.length >= 5 ? args[4] : "tcp://localhost:1883";
 
         // This will perform the internal validations of the ProductionLine record (IP format, port range, etc.)
         ProductionLine self = new ProductionLine(id, ip, port);
 
-        return new NodeConfig(self, serverUrl);
+        return new NodeConfig(self, serverUrl, mqttBrokerUrl);
     }
 
     /**
