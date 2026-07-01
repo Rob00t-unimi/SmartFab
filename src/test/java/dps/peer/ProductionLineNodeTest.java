@@ -372,8 +372,10 @@ public class ProductionLineNodeTest {
             assertEquals(0, node.getLogicalClock());
             assertEquals(0, node.getRepliesReceived());
 
+            node.setLastCalculatedAverage(90.0);
+
             // Perform request broadcast
-            node.requestCalibration(90.0);
+            node.requestCalibration();
 
             // Wait a brief moment for the async task to complete
             Thread.sleep(300);

@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.NoSuchElementException;
 
+/** Declares a Spring Boot REST controller mapped to the path "/production-lines" **/
 @RestController
 @RequestMapping("/production-lines")
 public class AdminServerController {
@@ -20,6 +21,11 @@ public class AdminServerController {
         this.registry = registry;
     }
 
+    /**
+     * POST endpoint for registration.
+     * It converts the JSON body into a ProductionLine object, adds it to the registry, and returns the list of peers (200 OK)
+     * or a 409 Conflict error if the ID already exists.
+     **/
     @PostMapping
     public ResponseEntity<?> register(@RequestBody ProductionLine line) {
         try {
@@ -30,11 +36,18 @@ public class AdminServerController {
         }
     }
 
+    /**
+     * GET endpoint to retrieve the current status of all machines.
+     **/
     @GetMapping
     public List<ProductionLineStatus> getLinesStatus() {
         return registry.getLinesStatus();
     }
 
+    /**
+     * GET endpoint to calculate the average vibration between two timestamps,
+     * returning 404 Not Found if the specified ID is not found.
+     **/
     @GetMapping("/{id}/stats")
     public ResponseEntity<?> getStats(
             @PathVariable int id,

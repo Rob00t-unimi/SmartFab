@@ -8,7 +8,6 @@ import java.util.List;
 
 /**
  * Implementation of a sliding window buffer with a size of 8 and 50% overlap.
- * Uses standard Java synchronization (synchronized, wait, notifyAll).
  */
 public class SlidingWindowBuffer implements Buffer {
 
@@ -17,6 +16,8 @@ public class SlidingWindowBuffer implements Buffer {
 
     private final List<Measurement> measurements = new ArrayList<>();
 
+
+    /** Method invoked by the sensor thread (producer) to insert a measurement. **/
     @Override
     public synchronized void addMeasurement(Measurement m) {
         // Wait if the buffer is full (reaches WINDOW_SIZE)
@@ -38,6 +39,7 @@ public class SlidingWindowBuffer implements Buffer {
         }
     }
 
+    /** Method invoked by the monitoring loop (consumer) **/
     @Override
     public synchronized List<Measurement> readAllAndClear() {
         // Wait until the window is full
@@ -46,7 +48,7 @@ public class SlidingWindowBuffer implements Buffer {
                 wait();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return new ArrayList<>();
+                return new ArrayList<>(); // returns an empty list if interrupted
             }
         }
 
@@ -64,6 +66,10 @@ public class SlidingWindowBuffer implements Buffer {
         return result;
     }
 
+    /**
+     * Completely empties the buffer (called during alarm/calibration)
+     * wakes up all threads to prevent deadlocks during state changes.
+     **/
     @Override
     public synchronized void clear() {
         measurements.clear();

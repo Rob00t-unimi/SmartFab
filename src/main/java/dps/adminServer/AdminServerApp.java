@@ -11,7 +11,10 @@ public class AdminServerApp {
         SpringApplication.run(AdminServerApp.class, args);
     }
 
-    @Bean
+    /** Declare the registry as a Singleton managed by Spring,
+     * so that it can be injected into each (REST) AdminServerController constructor.
+     * **/
+    @Bean // Bean = a system object created, managed, and held in memory by Spring itself.
     public ProductionLineRegistry productionLineRegistry() {
         return new ProductionLineRegistry();
     }

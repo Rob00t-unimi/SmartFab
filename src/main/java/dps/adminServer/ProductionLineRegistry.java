@@ -7,7 +7,7 @@ import dps.common.model.ProductionLineStatus;
 import java.util.*;
 
 /**
- * Registry for production lines with fine-grained synchronization.
+ * Registry for production lines
  * It uses an internal class to manage data per production line, allowing
  * concurrent access to different lines.
  */
@@ -19,6 +19,7 @@ public class ProductionLineRegistry {
     /**
      * Internal class to hold data for a single production line.
      * Provides its own synchronization to allow fine-grained locking.
+     * By locking only this object (synchronized), two different nodes can update their states on the server simultaneously without conflicting.
      */
     private static class ProductionLineData {
         private final ProductionLine line;
@@ -27,7 +28,7 @@ public class ProductionLineRegistry {
 
         public ProductionLineData(ProductionLine line) {
             this.line = line;
-            this.state = OperationalState.FULLY_OPERATIONAL;
+            this.state = OperationalState.FULLY_OPERATIONAL;  // default initial state of a line
         }
 
         public synchronized void updateState(OperationalState state) {
@@ -58,6 +59,7 @@ public class ProductionLineRegistry {
     /**
      * Registers a new production line.
      * Synchronized on 'this' because it modifies the shared map structure.
+     * Returns the list of peers in the network.
      */
     public synchronized List<ProductionLine> register(ProductionLine newLine) {
         if (lineDataMap.containsKey(newLine.id())) {
@@ -81,7 +83,7 @@ public class ProductionLineRegistry {
     }
 
     /**
-     * Returns a list of all production lines with their current states.
+     * Returns a list of records with of production lines with their current states.
      * Minimizes the global lock duration.
      */
     public List<ProductionLineStatus> getLinesStatus() {

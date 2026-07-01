@@ -20,6 +20,9 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
         this.node = node;
     }
 
+    /**
+     * Accept the presentation request of another node and add this node into local topology of "this.node".
+     **/
     @Override
     public void present(PresentationRequest request, StreamObserver<PresentationResponse> responseObserver) {
         try {
@@ -57,6 +60,21 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
         }
     }
 
+
+    /**
+     * Handles incoming calibration requests from other peers (Ricart-Agrawala Server-side logic).
+     * 
+     * Updates the local Lamport logical clock using the received timestamp:
+     * Clock = max(localClock, receivedTimestamp) + 1.
+     * 
+     * Compares the priorities to decide whether to reply immediately or defer the reply:
+     * - Defers if local state is UNDER_CALIBRATION.
+     * - Defers if local state is WAITING_FOR_CALIBRATION and the local node has higher priority.
+     *   Priority is determined by:
+     *     1) Criticality (higher criticality has priority).
+     *     2) Node ID (higher ID has priority as a tie-breaker).
+     * - Replies immediately with CalibrationReply otherwise.
+     */
     @Override
     public void requestCalibration(CalibrationRequest request, StreamObserver<CalibrationReply> responseObserver) {
         try {
@@ -64,21 +82,21 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
             double senderCriticality = request.getCriticality();
             long senderTimestamp = request.getTimestamp();
 
-            // 1. Update our local Lamport clock upon receiving the message
+            // Update our local Lamport clock upon receiving the message
             node.updateClockOnReceive(senderTimestamp);
 
             boolean defer = false;
 
             synchronized (node) {
-                OperationalState localState = node.getState();
-                int localId = node.getSelf().id();
+                OperationalState localState = node.getState();  // get current local state
+                int localId = node.getSelf().id();              // get local id
 
                 if (localState == OperationalState.UNDER_CALIBRATION) {
                     // We are currently in calibration, so we have the resource. Defer the reply.
                     defer = true;
                 } else if (localState == OperationalState.WAITING_FOR_CALIBRATION) {
                     // Both want the resource. Compare priority (criticality then ID)
-                    double localCriticality = (node.getLastCalculatedAverage() - 80.0) / 80.0;
+                    double localCriticality = node.calcCriticality();
 
                     if (localCriticality > senderCriticality) {
                         defer = true;

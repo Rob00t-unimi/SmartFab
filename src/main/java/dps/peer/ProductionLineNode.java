@@ -7,6 +7,7 @@ import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
 import dps.peer.proto.PresentationRequest;
 import dps.peer.proto.PresentationResponse;
+import dps.peer.proto.CalibrationRequest;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
@@ -39,20 +40,21 @@ public class ProductionLineNode {
     
     private Server grpcServer;
 
-    // Sensor and state properties (Lab 6)
+    // Sensor and state properties
     private final SlidingWindowBuffer buffer = new SlidingWindowBuffer();
     private final MonitoringSensor sensor = new MonitoringSensor(buffer);
     private OperationalState state = OperationalState.FULLY_OPERATIONAL;
+    private final double vibrationThreshold = 80.0;
 
-    private Thread monitoringThread;
-    private volatile boolean running = true;
+    private Thread monitoringThread;    // consumer thread
+    private volatile boolean running = true;    // `volatile` saves to RAM, so all threads see exactly that value.
 
-    // Ricart-Agrawala variables (Lab 6 - Commit 2 & 3)
+    // Ricart-Agrawala variables
     private long logicalClock = 0;
-    private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();
+    private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();   // deferred response queue (pending gRPC StreamObserver)
     private double lastCalculatedAverage = 0.0;
     
-    // Reply count tracking (Lab 6 - Feature 3 Commit 1)
+    // Reply count tracking
     private int repliesReceived = 0;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
@@ -87,7 +89,7 @@ public class ProductionLineNode {
             System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
             
             // Block until JVM is terminated
-            node.blockUntilShutdown();
+            node.blockUntilGRPCShutdown();
 
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
@@ -155,6 +157,7 @@ public class ProductionLineNode {
         System.out.println("[LINEA " + self.id() + "] gRPC server started, listening on port " + self.port());
 
         // Add a shutdown hook to stop the gRPC server when JVM shuts down
+        // starts a new thread that performs cleanup during the shutdown phase
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("[LINEA " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
             ProductionLineNode.this.stopGrpcServer();
@@ -173,6 +176,7 @@ public class ProductionLineNode {
                     grpcServer.shutdownNow();
                 }
             } catch (InterruptedException e) {
+                // If an interrupt occurs during the "try" phase, an exception is thrown and the interrupt must be re-raised.
                 grpcServer.shutdownNow();
                 Thread.currentThread().interrupt();
             }
@@ -184,7 +188,7 @@ public class ProductionLineNode {
     /**
      * Blocks the thread until the gRPC server is terminated.
      */
-    public void blockUntilShutdown() throws InterruptedException {
+    public void blockUntilGRPCShutdown() throws InterruptedException {
         if (grpcServer != null) {
             grpcServer.awaitTermination();
         }
@@ -199,12 +203,13 @@ public class ProductionLineNode {
         String url = this.serverUrl + "/production-lines";
 
         try {
-            // Perform HTTP POST request. Spring will automatically serialize 'this.self' into JSON
+            // Perform HTTP POST request (the only post avaiable in /production-lines is "register").
+            // Spring will automatically serialize 'this.self' into JSON
             // and deserialize the response JSON array into an array of ProductionLine.
-            ProductionLine[] response = restTemplate.postForObject(url, this.self, ProductionLine[].class);
+            ProductionLine[] response = restTemplate.postForObject(url, this.self, ProductionLine[].class); // The third parameter tells Spring which object to deserialize the response into.
             if (response != null) {
                 for (ProductionLine peer : response) {
-                    addPeer(peer);
+                    addPeer(peer); // synchronized
                 }
                 System.out.println("[LINEA " + self.id() + "] REST registration successful. Loaded " + response.length + " peer(s) from Admin Server.");
             }
@@ -221,7 +226,7 @@ public class ProductionLineNode {
      * Broadcasts a gRPC presentation request in parallel to all currently known peers.
      */
     public void presentSelfToPeers() {
-        List<ProductionLine> currentPeers = getPeers();
+        List<ProductionLine> currentPeers = getPeers(); // synchronized
         if (currentPeers.isEmpty()) {
             System.out.println("[LINEA " + self.id() + "] No existing peers to present to in local network view.");
             return;
@@ -229,30 +234,34 @@ public class ProductionLineNode {
 
         System.out.println("[LINEA " + self.id() + "] Sending gRPC presentation requests to " + currentPeers.size() + " peer(s) in parallel...");
 
-        // P2P broadcasts must be done in parallel. We use CachedThreadPool.
+        // P2P broadcasts must be done in parallel by using CachedThreadPool.
         ExecutorService executor = Executors.newCachedThreadPool();
 
         for (ProductionLine peer : currentPeers) {
-            executor.submit(() -> {
+            executor.submit(() -> {  // For each peer, we assign and execute a lambda to a thread into the pool (
+                // Tasks are assigned to the pool threads sequentially within the loop, but the threads execute the gRPC calls in parallel, without waiting for the previous thread to establish or complete its connection.
                 ManagedChannel channel = null;
                 try {
-                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
-                            .usePlaintext()
+                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())  // gRPC channel creation
+                            .usePlaintext() // http instead of https
                             .build();
 
-                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
+                    // Creating a stub object locally allows server remote procedure calls to be made from it.
+                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel); // BlockingStub, because the current thread waits for the RPC response.
 
-                    NodeIdentity identity = NodeIdentity.newBuilder()
+                    // Constructing Messages using the Builder Pattern auto-generated by Protobuf
+                    NodeIdentity identity = NodeIdentity.newBuilder()   // NodeIdentity (object generated by Protobuf)
                             .setId(self.id())
                             .setIp(self.ip())
                             .setPort(self.port())
                             .build();
 
-                    PresentationRequest request = PresentationRequest.newBuilder()
+                    // Construction of the request
+                    PresentationRequest request = PresentationRequest.newBuilder()  // PresentationRequest (object generated by Protobuf)
                             .setSender(identity)
                             .build();
 
-                    // Timeout of 3 seconds for presentation response
+                    // Executing the gRPC call with a 3-second timeout to a gRPC server of another peer
                     PresentationResponse response = stub.withDeadlineAfter(3, TimeUnit.SECONDS).present(request);
                     if (response.getAccepted()) {
                         System.out.println("[LINEA " + self.id() + "] gRPC presentation ACCEPTED by Node " + peer.id());
@@ -265,6 +274,7 @@ public class ProductionLineNode {
                 } finally {
                     if (channel != null) {
                         try {
+                            // close the gRPC channel
                             channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -274,6 +284,7 @@ public class ProductionLineNode {
             });
         }
 
+        // Shutdown Thread Pool
         executor.shutdown();
         try {
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -281,7 +292,7 @@ public class ProductionLineNode {
             }
         } catch (InterruptedException e) {
             executor.shutdownNow();
-            Thread.currentThread().interrupt();
+            Thread.currentThread().interrupt(); // If an interrupt arrives that sends execution to the "catch" block, I re-throw it.
         }
     }
 
@@ -295,10 +306,10 @@ public class ProductionLineNode {
         }
 
         running = true;
-        sensor.startMeasuring();
+        sensor.startMeasuring();    // start sensor simulation
         System.out.println("[LINEA " + self.id() + "] Physical sensor simulator started.");
 
-        monitoringThread = new Thread(() -> {
+        monitoringThread = new Thread(() -> {   // create a thread with this lambda
             while (running) {
                 try {
                     // Block until 8 measurements are ready (50% overlap step on subsequent reads)
@@ -314,14 +325,14 @@ public class ProductionLineNode {
                     }
                     double average = sum / window.size();
                     
-                    // Track average value for criticality calculation (Lab 6)
+                    // Track average value for criticality calculation
                     setLastCalculatedAverage(average);
 
                     System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
-                            + String.format("%.2f", average) + " (Soglia: 80.0)");
+                            + String.format("%.2f", average) + " (Soglia: " + vibrationThreshold + ")");
 
                     // Check if threshold exceeded to trigger calibration transition
-                    if (average > 80.0 && getState() == OperationalState.FULLY_OPERATIONAL) {
+                    if (average > vibrationThreshold && getState() == OperationalState.FULLY_OPERATIONAL) {
                         transitionToWaitingForCalibration(average);
                     }
 
@@ -334,7 +345,7 @@ public class ProductionLineNode {
             }
         });
         monitoringThread.setName("Sensor-Monitoring-Loop-Node-" + self.id());
-        monitoringThread.start();
+        monitoringThread.start();   // start the thread
     }
 
     /**
@@ -364,12 +375,12 @@ public class ProductionLineNode {
         setState(OperationalState.WAITING_FOR_CALIBRATION);
 
         System.out.println("[LINEA " + self.id() + "] [FULLY_OPERATIONAL -> WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
-                + String.format("%.2f", average) + " exceeded threshold 80.0! Pausing sensor, clearing buffer, and requesting calibration...");
+                + String.format("%.2f", average) + " exceeded threshold " + vibrationThreshold + "! Pausing sensor, clearing buffer, and requesting calibration...");
 
         sensor.pauseMeasuring();
         buffer.clear();
 
-        // Asynchronously coordinate the calibration sequence in a separate thread (Lab 6 - Commit 3)
+        // Asynchronously start the calibration sequence in a separate thread
         new Thread(() -> {
             enterCalibrationAndWait();
             releaseCalibration();
@@ -377,19 +388,20 @@ public class ProductionLineNode {
     }
 
     /**
+     * Ricart-Agrawala client: increments the Lamport clock, calculates criticality based on the threshold being exceeded, and resets the response counter.
      * Sends a gRPC request for calibration to all active peers in parallel.
      */
-    public void requestCalibration(double averageVibration) {
-        List<ProductionLine> currentPeers = getPeers();
+    public void requestCalibration() {
+        List<ProductionLine> currentPeers = getPeers(); // synchronized
 
         long requestTimestamp;
         double requestCriticality;
 
         synchronized (this) {
-            incrementClock();
-            requestTimestamp = getLogicalClock();
-            requestCriticality = (averageVibration - 80.0) / 80.0;
-            resetRepliesReceived();
+            incrementClock(); // send event -> increment Lamport's clock
+            requestTimestamp = getLogicalClock(); // memorize current clock value
+            requestCriticality = calcCriticality();  // calculate criticality based on threshold
+            resetRepliesReceived(); // reset replies counter to start new round
         }
 
         if (currentPeers.isEmpty()) {
@@ -401,29 +413,32 @@ public class ProductionLineNode {
                 + " peer(s) in parallel (Clock: " + requestTimestamp 
                 + ", Criticality: " + String.format("%.4f", requestCriticality) + ")...");
 
-        ExecutorService executor = Executors.newCachedThreadPool();
+        ExecutorService executor = Executors.newCachedThreadPool();     // crate thread pool to send gRPC requests in parallel
 
         for (ProductionLine peer : currentPeers) {
-            executor.submit(() -> {
+            executor.submit(() -> {     // for each peer create a thread and start the task assigned without waiting other threads
                 ManagedChannel channel = null;
                 try {
+                    // create gRPC channel
                     channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
                             .usePlaintext()
                             .build();
 
+                    // create stub gRPC
                     PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
 
-                    dps.peer.proto.CalibrationRequest request = dps.peer.proto.CalibrationRequest.newBuilder()
+                    // construct message
+                    CalibrationRequest request = CalibrationRequest.newBuilder()
                             .setSenderId(self.id())
                             .setCriticality(requestCriticality)
                             .setTimestamp(requestTimestamp)
                             .build();
 
-                    // Timeout of 5 seconds for reply response
+                    // Send request with Timeout of 5 seconds for reply response
                     stub.withDeadlineAfter(5, TimeUnit.SECONDS).requestCalibration(request);
 
                     // Reply received successfully
-                    incrementRepliesReceived();
+                    incrementRepliesReceived(); // increment replies counter
                     System.out.println("[LINEA " + self.id() + "] Received CalibrationReply from Node " + peer.id());
 
                 } catch (Exception e) {
@@ -434,6 +449,7 @@ public class ProductionLineNode {
                 } finally {
                     if (channel != null) {
                         try {
+                            // close gRPC channel
                             channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -448,17 +464,25 @@ public class ProductionLineNode {
         executor.shutdown();
     }
 
+    public double calcCriticality() {
+        return (getLastCalculatedAverage() - vibrationThreshold) / vibrationThreshold;
+    }
+
     /**
      * Blocks the current thread and requests calibration access from peers.
      * Transitions state to UNDER_CALIBRATION and performs the simulated calibration once allowed.
      */
     public void enterCalibrationAndWait() {
+
+        // The method is not entirely synchronized, otherwise we would block all threads for the entire duration of the calibration or the network communications
+        // so the synchronization is implemented at a finer granularity.
+
         double avg = getLastCalculatedAverage();
         
         System.out.println("[LINEA " + self.id() + "] [WAITING_FOR_CALIBRATION] Initiating Ricart-Agrawala calibration sequence...");
         
         // 1. Broadcast the requests to peers
-        requestCalibration(avg);
+        requestCalibration();
 
         // 2. Wait until we receive all replies
         int requiredReplies = getPeerCount();
@@ -500,16 +524,16 @@ public class ProductionLineNode {
 
         synchronized (this) {
             setState(OperationalState.FULLY_OPERATIONAL);
-            observers = getAndClearDeferredObservers();
+            observers = getAndClearDeferredObservers();     // get the observers accumulated when calibration was locked by this
         }
 
         System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION -> FULLY_OPERATIONAL] Calibration completed. Releasing " 
                 + observers.size() + " deferred replies...");
 
-        for (StreamObserver<CalibrationReply> observer : observers) {
+        for (StreamObserver<CalibrationReply> observer : observers) {       // iterate on the observers
             try {
-                observer.onNext(CalibrationReply.getDefaultInstance());
-                observer.onCompleted();
+                observer.onNext(CalibrationReply.getDefaultInstance());     // send consensus reply
+                observer.onCompleted();     // close connection with peer (client)
             } catch (Exception e) {
                 System.err.println("[LINEA " + self.id() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
             }
@@ -536,7 +560,7 @@ public class ProductionLineNode {
         return sensor;
     }
 
-    // Thread-safe Lamport clock and RA helper methods (Lab 6 - Commit 2 & 3)
+    // Thread-safe Lamport clock and RA helper methods
     public synchronized long getLogicalClock() {
         return logicalClock;
     }
@@ -568,7 +592,7 @@ public class ProductionLineNode {
         this.lastCalculatedAverage = average;
     }
 
-    // Reply tracking methods (Lab 6 - Feature 3 Commit 1)
+    // Reply tracking methods
     public synchronized void incrementRepliesReceived() {
         repliesReceived++;
         notifyAll(); // Wake up thread waiting for replies

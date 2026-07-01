@@ -61,3 +61,11 @@ protobuf {
 tasks.test {
     useJUnitPlatform()
 }
+
+tasks.register<JavaExec>("runPeer") {
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dps.peer.ProductionLineNode")
+    if (project.hasProperty("args")) {
+        args(project.property("args").toString().split(" "))
+    }
+}
