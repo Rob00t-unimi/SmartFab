@@ -16,6 +16,9 @@ import io.grpc.stub.StreamObserver;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
@@ -477,23 +480,20 @@ public class ProductionLineNode {
                         localAveragesBuffer.clear();
                     }
                     
-                    // Construct JSON payload manually
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("{");
-                    sb.append("\"id\":").append(self.id()).append(",");
-                    sb.append("\"averages\":[");
-                    for (int i = 0; i < averagesToPublish.size(); i++) {
-                        sb.append(String.format(java.util.Locale.US, "%.4f", averagesToPublish.get(i)));
-                        if (i < averagesToPublish.size() - 1) {
-                            sb.append(",");
-                        }
-                    }
-                    sb.append("],");
-                    sb.append("\"timestamp\":").append(System.currentTimeMillis()).append(",");
-                    sb.append("\"state\":\"").append(getState().name()).append("\"");
-                    sb.append("}");
+                    // Construct JSON payload using Jackson ObjectMapper
+                    ObjectMapper mapper = new ObjectMapper();
+                    ObjectNode rootNode = mapper.createObjectNode();
+                    rootNode.put("id", self.id());
                     
-                    String payload = sb.toString();
+                    ArrayNode averagesArray = mapper.createArrayNode();
+                    for (double avg : averagesToPublish) {
+                        averagesArray.add(avg);
+                    }
+                    rootNode.set("averages", averagesArray);
+                    rootNode.put("timestamp", System.currentTimeMillis());
+                    rootNode.put("state", getState().name());
+                    
+                    String payload = mapper.writeValueAsString(rootNode);
                     publishTelemetry(payload);
                     
                 } catch (InterruptedException e) {
