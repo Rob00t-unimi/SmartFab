@@ -69,8 +69,8 @@ public class ProductionLineNode {
     private final String mqttBrokerUrl;
 
     // MQTT buffer and publisher thread
-    private final List<Double> localAveragesBuffer = new ArrayList<>();
-    private Thread mqttPublisherThread;
+    private final List<Double> localAveragesBuffer = new ArrayList<>();     // local averages from sensor to send via mqtt
+    private Thread mqttPublisherThread; // 10 seconds cycle mqtt thread
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         this(self, serverUrl, "tcp://localhost:1883");
@@ -103,7 +103,7 @@ public class ProductionLineNode {
             // 3. gRPC Presentation to all registered peers in parallel
             node.presentSelfToPeers();
 
-            // 4. Connect to MQTT Broker (Lab 7 - Commit 1)
+            // 4. Connect to MQTT Broker
             node.connectMqtt();
 
             // 5. Start monitoring sensor and window consumer loop
@@ -396,6 +396,10 @@ public class ProductionLineNode {
             }
             monitoringThread = null;
         }
+
+        // The MQTT publishing thread is safely stopped via interruption
+        // waiting up to 2 seconds for it to shut down
+        // and the client's TCP socket is closed.
         if (mqttPublisherThread != null) {
             mqttPublisherThread.interrupt();
             try {
@@ -457,7 +461,7 @@ public class ProductionLineNode {
         try {
             String topic = "smartfab/production-line/" + self.id() + "/telemetry";
             MqttMessage message = new MqttMessage(payload.getBytes());
-            message.setQos(1);
+            message.setQos(1);  // guarantees that the message is received at least once
             mqttClient.publish(topic, message);
         } catch (Exception e) {
             System.err.println("[LINEA " + self.id() + "] ❌ Error publishing MQTT telemetry: " + e.getMessage());
@@ -465,7 +469,7 @@ public class ProductionLineNode {
     }
 
     /**
-     * Starts the periodic thread that publishes collected averages every 10 seconds (Lab 7 - Commit 2).
+     * Starts the periodic thread that publishes collected averages every 10 seconds.
      */
     private void startMqttTelemetryPublishing() {
         mqttPublisherThread = new Thread(() -> {
@@ -494,7 +498,8 @@ public class ProductionLineNode {
                     rootNode.put("state", getState().name());
                     
                     String payload = mapper.writeValueAsString(rootNode);
-                    publishTelemetry(payload);
+
+                    publishTelemetry(payload); // publish
                     
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -690,7 +695,58 @@ public class ProductionLineNode {
     }
 
     public synchronized void setState(OperationalState state) {
+        OperationalState oldState = this.state;
         this.state = state;
+        if (oldState != state) {
+            publishStateUpdate(state);
+        }
+    }
+
+    /**
+     * Publishes status payload to the MQTT Broker.
+     */
+    public void publishStatus(String payload) {
+        synchronized (this) {
+            if (mqttClient == null || !mqttClient.isConnected()) {
+                System.err.println("[LINEA " + self.id() + "] Cannot publish status: MQTT client not connected.");
+                return;
+            }
+        }
+        try {
+            String topic = "smartfab/production-line/" + self.id() + "/status";
+            MqttMessage message = new MqttMessage(payload.getBytes());
+            message.setQos(1);  // at least 1 message
+            mqttClient.publish(topic, message);
+        } catch (Exception e) {
+            System.err.println("[LINEA " + self.id() + "] ❌ Error publishing MQTT status: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Builds and asynchronously publishes state change update.
+     */
+    private void publishStateUpdate(OperationalState newState) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode rootNode = mapper.createObjectNode();
+            rootNode.put("id", self.id());
+            rootNode.put("state", newState.name());
+            rootNode.put("timestamp", System.currentTimeMillis());
+            
+            if (newState == OperationalState.WAITING_FOR_CALIBRATION || newState == OperationalState.UNDER_CALIBRATION) {
+                rootNode.put("criticality", calcCriticality());
+            }
+            
+            String payload = mapper.writeValueAsString(rootNode);
+            
+            // Asynchronously publish to avoid holding the monitor lock of 'this' during network I/O
+            new Thread(() -> {
+                publishStatus(payload);
+            }, "MQTT-Status-Publisher-Node-" + self.id()).start();
+            
+        } catch (Exception e) {
+            System.err.println("[LINEA " + self.id() + "] Error building MQTT status payload: " + e.getMessage());
+        }
     }
 
     public SlidingWindowBuffer getBuffer() {
@@ -749,6 +805,22 @@ public class ProductionLineNode {
 
     public ProductionLine getSelf() {
         return self;
+    }
+
+    public double getVibrationThreshold() {
+        return vibrationThreshold;
+    }
+
+    void addAverageToBufferForTesting(double avg) {
+        synchronized (localAveragesBuffer) {
+            localAveragesBuffer.add(avg);
+        }
+    }
+
+    List<Double> getLocalAveragesBufferSnapshot() {
+        synchronized (localAveragesBuffer) {
+            return new ArrayList<>(localAveragesBuffer);
+        }
     }
 
     public String getServerUrl() {
