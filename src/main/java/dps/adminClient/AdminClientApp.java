@@ -35,6 +35,23 @@ public class AdminClientApp {
         return new ArrayList<>();
     }
 
+    /**
+     * Queries the Admin Server for the average vibration level of a specific production line
+     * between timestamp t1 and timestamp t2.
+     */
+    public double getAverageVibration(int id, long t1, long t2) {
+        String url = serverUrl + "/production-lines/{id}/stats?t1={t1}&t2={t2}";
+        try {
+            Double response = restTemplate.getForObject(url, Double.class, id, t1, t2);
+            if (response != null) {
+                return response;
+            }
+        } catch (Exception e) {
+            System.err.println("[ADMIN_CLIENT] ❌ Error fetching average vibration for node " + id + ": " + e.getMessage());
+        }
+        return 0.0;
+    }
+
     public static void main(String[] args) {
         String serverUrl = args.length > 0 ? args[0] : "http://localhost:8080";
         AdminClientApp client = new AdminClientApp(serverUrl);
