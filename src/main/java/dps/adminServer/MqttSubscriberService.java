@@ -6,6 +6,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dps.common.model.OperationalState;
 
 /**
  * Background service that subscribes to peer MQTT telemetry and status updates.
@@ -75,8 +78,38 @@ public class MqttSubscriberService implements MqttCallback {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) throws Exception {
-        // Will implement JSON parsing and registry updates in Commit 2
+        String payload = new String(message.getPayload());
         System.out.println("[ADMIN_SERVER] Received MQTT message on topic: " + topic);
+
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(payload);
+            int id = root.get("id").asInt();
+
+            // state update
+            if (topic.endsWith("/status")) {
+                String stateStr = root.get("state").asText();
+                OperationalState state = OperationalState.valueOf(stateStr);
+                registry.updateState(id, state);    // update on registry
+                System.out.println("[ADMIN_SERVER] [MQTT-STATUS] Updated state of node " + id + " to " + state);
+
+            // Update registry with all telemetries
+            } else if (topic.endsWith("/telemetry")) {
+                long timestamp = root.get("timestamp").asLong();
+                JsonNode averagesNode = root.get("averages");
+                if (averagesNode != null && averagesNode.isArray()) {
+                    int count = 0;
+                    for (JsonNode avgNode : averagesNode) {
+                        double avg = avgNode.asDouble();
+                        registry.addTelemetry(id, avg, timestamp);
+                        count++;
+                    }
+                    System.out.println("[ADMIN_SERVER] [MQTT-TELEMETRY] Added " + count + " telemetry average(s) for node " + id);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[ADMIN_SERVER] ❌ Error parsing MQTT payload on topic " + topic + ": " + e.getMessage());
+        }
     }
 
     @Override
