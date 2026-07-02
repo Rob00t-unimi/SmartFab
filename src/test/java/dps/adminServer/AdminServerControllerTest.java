@@ -116,4 +116,61 @@ public class AdminServerControllerTest {
                 .andExpect(jsonPath("$[0].line.id", is(id)))
                 .andExpect(jsonPath("$[0].state", is("WAITING_FOR_CALIBRATION")));
     }
+
+    @Test
+    public void testMqttIntegrationWithRegistry() throws Exception {
+        int id = 50;
+        ProductionLine line = new ProductionLine(id, "127.0.0.1", 5050);
+        registry.register(line);
+
+        // Verify initial state is FULLY_OPERATIONAL
+        mockMvc.perform(get("/production-lines"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].line.id", is(id)))
+                .andExpect(jsonPath("$[0].state", is("FULLY_OPERATIONAL")));
+
+        // Create temporary MQTT client to publish updates to localhost broker
+        org.eclipse.paho.client.mqttv3.MqttClient tempMqttClient = 
+                new org.eclipse.paho.client.mqttv3.MqttClient("tcp://localhost:1883", "smartfab-test-publisher", new org.eclipse.paho.client.mqttv3.persist.MemoryPersistence());
+        tempMqttClient.connect();
+
+        // 1. Publish status update
+        String statusPayload = "{\"id\":" + id + ",\"state\":\"WAITING_FOR_CALIBRATION\",\"timestamp\":" + System.currentTimeMillis() + "}";
+        org.eclipse.paho.client.mqttv3.MqttMessage statusMsg = new org.eclipse.paho.client.mqttv3.MqttMessage(statusPayload.getBytes());
+        statusMsg.setQos(1);
+        tempMqttClient.publish("smartfab/production-line/" + id + "/status", statusMsg);
+
+        // 2. Publish telemetry averages list
+        long now = System.currentTimeMillis();
+        String telemetryPayload = "{\"id\":" + id + ",\"averages\":[65.5,75.5],\"timestamp\":" + now + "}";
+        org.eclipse.paho.client.mqttv3.MqttMessage telemetryMsg = new org.eclipse.paho.client.mqttv3.MqttMessage(telemetryPayload.getBytes());
+        telemetryMsg.setQos(1);
+        tempMqttClient.publish("smartfab/production-line/" + id + "/telemetry", telemetryMsg);
+
+        tempMqttClient.disconnect();
+        tempMqttClient.close();
+
+        // Wait a brief moment for the subscriber to receive and process messages
+        long startTime = System.currentTimeMillis();
+        while (System.currentTimeMillis() - startTime < 3000) {
+            // Verify that the state was updated to WAITING_FOR_CALIBRATION in the registry
+            if (registry.getLinesStatus().get(0).state() == OperationalState.WAITING_FOR_CALIBRATION) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+
+        // Assert state update
+        mockMvc.perform(get("/production-lines"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].line.id", is(id)))
+                .andExpect(jsonPath("$[0].state", is("WAITING_FOR_CALIBRATION")));
+
+        // Assert average vibration query REST endpoint (65.5 + 75.5) / 2 = 70.5
+        mockMvc.perform(get("/production-lines/" + id + "/stats")
+                .param("t1", String.valueOf(now - 10000))
+                .param("t2", String.valueOf(now + 10000)))
+                .andExpect(status().isOk())
+                .andExpect(content().string("70.5"));
+    }
 }
