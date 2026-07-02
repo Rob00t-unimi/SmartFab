@@ -38,7 +38,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
             // Add the new peer to our local thread-safe topology registry
             node.addPeer(newPeer);
 
-            System.out.println("[LINEA " + node.getSelf().id() + "] Received gRPC presentation request from Node " 
+            System.out.println("[PEER " + node.getSelf().id() + "] Received gRPC presentation request from Node " 
                     + newPeer.id() + " (" + newPeer.ip() + ":" + newPeer.port() + "). Adding to local topology.");
 
             // Respond back indicating acceptance
@@ -113,7 +113,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                 node.addDeferredObserver(senderId, responseObserver);
             } else {
                 // Reply immediately
-                System.out.println("[LINEA " + node.getSelf().id() + "] Replying IMMEDIATELY to calibration request from Node " 
+                System.out.println("[PEER " + node.getSelf().id() + "] Replying IMMEDIATELY to calibration request from Node " 
                         + senderId + " (Clock: " + senderTimestamp + ", Criticality: " + String.format("%.4f", senderCriticality) + ")");
 
                 CalibrationReply reply = CalibrationReply.getDefaultInstance();

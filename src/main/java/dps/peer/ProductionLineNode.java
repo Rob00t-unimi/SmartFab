@@ -89,10 +89,12 @@ public class ProductionLineNode {
         ProductionLineNode node = null;
         try {
             NodeConfig config = parseArgs(args);
+            // Redirect console output to LogUtils for clean colorized and shared logs
+            dps.common.util.LogUtils.redirectSystemOutAndErr("PEER-" + config.self().id(), dps.common.util.LogUtils.ANSI_GREEN);
             node = new ProductionLineNode(config.self(), config.serverUrl(), config.mqttBrokerUrl());
 
-            System.out.println("[LINEA " + node.getSelf().id() + "] Starting node on " + node.getSelf().ip() + ":" + node.getSelf().port());
-            System.out.println("[LINEA " + node.getSelf().id() + "] Admin Server URL: " + node.getServerUrl());
+            System.out.println("[PEER " + node.getSelf().id() + "] Starting node on " + node.getSelf().ip() + ":" + node.getSelf().port());
+            System.out.println("[PEER " + node.getSelf().id() + "] Admin Server URL: " + node.getServerUrl());
 
             // 1. Start gRPC Server first so that peers can reach us as soon as we register
             node.startGrpcServer();
@@ -109,7 +111,7 @@ public class ProductionLineNode {
             // 5. Start monitoring sensor and window consumer loop
             node.startMonitoring();
 
-            System.out.println("[LINEA " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
+            System.out.println("[PEER " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
             
             // Block until JVM is terminated
             node.blockUntilGRPCShutdown();
@@ -178,12 +180,12 @@ public class ProductionLineNode {
                 .build()
                 .start();
 
-        System.out.println("[LINEA " + self.id() + "] gRPC server started, listening on port " + self.port());
+        System.out.println("[PEER " + self.id() + "] gRPC server started, listening on port " + self.port());
 
         // Add a shutdown hook to stop the gRPC server when JVM shuts down
         // starts a new thread that performs cleanup during the shutdown phase
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("[LINEA " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
+            System.out.println("[PEER " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
             ProductionLineNode.this.stopGrpcServer();
             ProductionLineNode.this.stopMonitoring();
         }));
@@ -205,7 +207,7 @@ public class ProductionLineNode {
                 Thread.currentThread().interrupt();
             }
             grpcServer = null;
-            System.out.println("[LINEA " + self.id() + "] gRPC server stopped.");
+            System.out.println("[PEER " + self.id() + "] gRPC server stopped.");
         }
     }
 
@@ -235,7 +237,7 @@ public class ProductionLineNode {
                 for (ProductionLine peer : response) {
                     addPeer(peer); // synchronized
                 }
-                System.out.println("[LINEA " + self.id() + "] REST registration successful. Loaded " + response.length + " peer(s) from Admin Server.");
+                System.out.println("[PEER " + self.id() + "] REST registration successful. Loaded " + response.length + " peer(s) from Admin Server.");
             }
         } catch (HttpClientErrorException.Conflict e) {
             throw new IllegalStateException("Registration conflict: Node with ID " + self.id() + " is already registered.");
@@ -252,11 +254,11 @@ public class ProductionLineNode {
     public void presentSelfToPeers() {
         List<ProductionLine> currentPeers = getPeers(); // synchronized
         if (currentPeers.isEmpty()) {
-            System.out.println("[LINEA " + self.id() + "] No existing peers to present to in local network view.");
+            System.out.println("[PEER " + self.id() + "] No existing peers to present to in local network view.");
             return;
         }
 
-        System.out.println("[LINEA " + self.id() + "] Sending gRPC presentation requests to " + currentPeers.size() + " peer(s) in parallel...");
+        System.out.println("[PEER " + self.id() + "] Sending gRPC presentation requests to " + currentPeers.size() + " peer(s) in parallel...");
 
         // P2P broadcasts must be done in parallel by using CachedThreadPool.
         ExecutorService executor = Executors.newCachedThreadPool();
@@ -288,13 +290,13 @@ public class ProductionLineNode {
                     // Executing the gRPC call with a 3-second timeout to a gRPC server of another peer
                     PresentationResponse response = stub.withDeadlineAfter(3, TimeUnit.SECONDS).present(request);
                     if (response.getAccepted()) {
-                        System.out.println("[LINEA " + self.id() + "] gRPC presentation ACCEPTED by Node " + peer.id());
+                        System.out.println("[PEER " + self.id() + "] gRPC presentation ACCEPTED by Node " + peer.id());
                     } else {
-                        System.out.println("[LINEA " + self.id() + "] ⚠️ gRPC presentation REJECTED by Node " + peer.id());
+                        System.out.println("[PEER " + self.id() + "] ⚠️ gRPC presentation REJECTED by Node " + peer.id());
                     }
 
                 } catch (Exception e) {
-                    System.err.println("[LINEA " + self.id() + "] ❌ gRPC presentation FAILED to Node " + peer.id() + " - Error: " + e.getMessage());
+                    System.err.println("[PEER " + self.id() + "] ❌ gRPC presentation FAILED to Node " + peer.id() + " - Error: " + e.getMessage());
                 } finally {
                     if (channel != null) {
                         try {
@@ -331,7 +333,7 @@ public class ProductionLineNode {
 
         running = true;
         sensor.startMeasuring();    // start sensor simulation
-        System.out.println("[LINEA " + self.id() + "] Physical sensor simulator started.");
+        System.out.println("[PEER " + self.id() + "] Physical sensor simulator started.");
 
         monitoringThread = new Thread(() -> {   // create a thread with this lambda
             while (running) {
@@ -357,8 +359,8 @@ public class ProductionLineNode {
                         localAveragesBuffer.add(average);
                     }
 
-                    System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
-                            + String.format("%.2f", average) + " (Soglia: " + vibrationThreshold + ")");
+                    System.out.println("[PEER " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
+                            + String.format("%.2f", average) + " (Threshold: " + vibrationThreshold + ")");
 
                     // Check if threshold exceeded to trigger calibration transition
                     if (average > vibrationThreshold && getState() == OperationalState.FULLY_OPERATIONAL) {
@@ -369,7 +371,7 @@ public class ProductionLineNode {
                     if (!running) {
                         break;
                     }
-                    System.err.println("[LINEA " + self.id() + "] Error in sensor monitoring loop: " + e.getMessage());
+                    System.err.println("[PEER " + self.id() + "] Error in sensor monitoring loop: " + e.getMessage());
                 }
             }
         });
@@ -410,7 +412,7 @@ public class ProductionLineNode {
             mqttPublisherThread = null;
         }
         disconnectMqtt(); // Disconnect MQTT client
-        System.out.println("[LINEA " + self.id() + "] Sensor monitoring loop stopped.");
+        System.out.println("[PEER " + self.id() + "] Sensor monitoring loop stopped.");
     }
 
     /**
@@ -424,9 +426,9 @@ public class ProductionLineNode {
             MqttConnectOptions connOpts = new MqttConnectOptions();  // config connection parameters
             connOpts.setCleanSession(true);
             
-            System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Connecting to MQTT Broker: " + mqttBrokerUrl + "...");
+            System.out.println("[PEER " + self.id() + "] [" + getState() + "] Connecting to MQTT Broker: " + mqttBrokerUrl + "...");
             mqttClient.connect(connOpts);   // open connection (wait broker response)
-            System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Connected to MQTT Broker successfully.");
+            System.out.println("[PEER " + self.id() + "] [" + getState() + "] Connected to MQTT Broker successfully.");
         } catch (Exception e) {
             throw new IllegalStateException("MQTT connection failed to broker " + mqttBrokerUrl + ": " + e.getMessage(), e);
         }
@@ -438,12 +440,12 @@ public class ProductionLineNode {
     public synchronized void disconnectMqtt() {
         if (mqttClient != null && mqttClient.isConnected()) {
             try {
-                System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Disconnecting from MQTT Broker...");
+                System.out.println("[PEER " + self.id() + "] [" + getState() + "] Disconnecting from MQTT Broker...");
                 mqttClient.disconnect();
                 mqttClient.close();
-                System.out.println("[LINEA " + self.id() + "] [" + getState() + "] Disconnected from MQTT Broker successfully.");
+                System.out.println("[PEER " + self.id() + "] [" + getState() + "] Disconnected from MQTT Broker successfully.");
             } catch (Exception e) {
-                System.err.println("[LINEA " + self.id() + "] ❌ Error disconnecting from MQTT Broker: " + e.getMessage());
+                System.err.println("[PEER " + self.id() + "] ❌ Error disconnecting from MQTT Broker: " + e.getMessage());
             }
         }
     }
@@ -454,7 +456,7 @@ public class ProductionLineNode {
     public void publishTelemetry(String payload) {
         synchronized (this) {
             if (mqttClient == null || !mqttClient.isConnected()) {
-                System.err.println("[LINEA " + self.id() + "] Cannot publish telemetry: MQTT client not connected.");
+                System.err.println("[PEER " + self.id() + "] Cannot publish telemetry: MQTT client not connected.");
                 return;
             }
         }
@@ -464,7 +466,7 @@ public class ProductionLineNode {
             message.setQos(1);  // guarantees that the message is received at least once
             mqttClient.publish(topic, message);
         } catch (Exception e) {
-            System.err.println("[LINEA " + self.id() + "] ❌ Error publishing MQTT telemetry: " + e.getMessage());
+            System.err.println("[PEER " + self.id() + "] ❌ Error publishing MQTT telemetry: " + e.getMessage());
         }
     }
 
@@ -505,7 +507,7 @@ public class ProductionLineNode {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (Exception e) {
-                    System.err.println("[LINEA " + self.id() + "] Error in MQTT telemetry publisher: " + e.getMessage());
+                    System.err.println("[PEER " + self.id() + "] Error in MQTT telemetry publisher: " + e.getMessage());
                 }
             }
         });
@@ -520,7 +522,7 @@ public class ProductionLineNode {
     private synchronized void transitionToWaitingForCalibration(double average) {
         setState(OperationalState.WAITING_FOR_CALIBRATION);
 
-        System.out.println("[LINEA " + self.id() + "] [FULLY_OPERATIONAL -> WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
+        System.out.println("[PEER " + self.id() + "] [FULLY_OPERATIONAL -> WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
                 + String.format("%.2f", average) + " exceeded threshold " + vibrationThreshold + "! Pausing sensor, clearing buffer, and requesting calibration...");
 
         sensor.pauseMeasuring();
@@ -551,11 +553,11 @@ public class ProductionLineNode {
         }
 
         if (currentPeers.isEmpty()) {
-            System.out.println("[LINEA " + self.id() + "] No peers in topology. No replies needed.");
+            System.out.println("[PEER " + self.id() + "] No peers in topology. No replies needed.");
             return;
         }
 
-        System.out.println("[LINEA " + self.id() + "] Requesting calibration from " + currentPeers.size() 
+        System.out.println("[PEER " + self.id() + "] Requesting calibration from " + currentPeers.size() 
                 + " peer(s) in parallel (Clock: " + requestTimestamp 
                 + ", Criticality: " + String.format("%.4f", requestCriticality) + ")...");
 
@@ -585,10 +587,10 @@ public class ProductionLineNode {
 
                     // Reply received successfully
                     incrementRepliesReceived(); // increment replies counter
-                    System.out.println("[LINEA " + self.id() + "] Received CalibrationReply from Node " + peer.id());
+                    System.out.println("[PEER " + self.id() + "] Received CalibrationReply from Node " + peer.id());
 
                 } catch (Exception e) {
-                    System.err.println("[LINEA " + self.id() + "] ❌ Failed to get CalibrationReply from Node " 
+                    System.err.println("[PEER " + self.id() + "] ❌ Failed to get CalibrationReply from Node " 
                             + peer.id() + " - Error: " + e.getMessage());
                     // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
                     incrementRepliesReceived();
@@ -625,7 +627,7 @@ public class ProductionLineNode {
 
         double avg = getLastCalculatedAverage();
         
-        System.out.println("[LINEA " + self.id() + "] [WAITING_FOR_CALIBRATION] Initiating Ricart-Agrawala calibration sequence...");
+        System.out.println("[PEER " + self.id() + "] [WAITING_FOR_CALIBRATION] Initiating Ricart-Agrawala calibration sequence...");
         
         // 1. Broadcast the requests to peers
         requestCalibration();
@@ -635,7 +637,7 @@ public class ProductionLineNode {
         synchronized (this) {
             while (getRepliesReceived() < requiredReplies) {
                 try {
-                    System.out.println("[LINEA " + self.id() + "] Waiting for replies... (Progress: " 
+                    System.out.println("[PEER " + self.id() + "] Waiting for replies... (Progress: " 
                             + getRepliesReceived() + "/" + requiredReplies + ")");
                     wait();
                 } catch (InterruptedException e) {
@@ -650,7 +652,7 @@ public class ProductionLineNode {
 
         // Generate random calibration duration between 3 and 7 seconds
         long duration = 3000 + (long) (Math.random() * 4000);
-        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] 🛠️ Entered calibration mode. Calibrating for " + duration + " ms...");
+        System.out.println("[PEER " + self.id() + "] [UNDER_CALIBRATION] 🛠️ Entered calibration mode. Calibrating for " + duration + " ms...");
         
         try {
             Thread.sleep(duration);
@@ -658,7 +660,7 @@ public class ProductionLineNode {
             Thread.currentThread().interrupt();
         }
 
-        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION] Calibration execution finished.");
+        System.out.println("[PEER " + self.id() + "] [UNDER_CALIBRATION] Calibration execution finished.");
     }
 
     /**
@@ -673,7 +675,7 @@ public class ProductionLineNode {
             observers = getAndClearDeferredObservers();     // get the observers accumulated when calibration was locked by this
         }
 
-        System.out.println("[LINEA " + self.id() + "] [UNDER_CALIBRATION -> FULLY_OPERATIONAL] Calibration completed. Releasing " 
+        System.out.println("[PEER " + self.id() + "] [UNDER_CALIBRATION -> FULLY_OPERATIONAL] Calibration completed. Releasing " 
                 + observers.size() + " deferred replies...");
 
         for (StreamObserver<CalibrationReply> observer : observers) {       // iterate on the observers
@@ -681,13 +683,13 @@ public class ProductionLineNode {
                 observer.onNext(CalibrationReply.getDefaultInstance());     // send consensus reply
                 observer.onCompleted();     // close connection with peer (client)
             } catch (Exception e) {
-                System.err.println("[LINEA " + self.id() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
+                System.err.println("[PEER " + self.id() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
             }
         }
 
         // Restart physical sensor measuring loop
         sensor.startMeasuring();
-        System.out.println("[LINEA " + self.id() + "] Physical sensor simulator resumed.");
+        System.out.println("[PEER " + self.id() + "] Physical sensor simulator resumed.");
     }
 
     public synchronized OperationalState getState() {
@@ -708,7 +710,7 @@ public class ProductionLineNode {
     public void publishStatus(String payload) {
         synchronized (this) {
             if (mqttClient == null || !mqttClient.isConnected()) {
-                System.err.println("[LINEA " + self.id() + "] Cannot publish status: MQTT client not connected.");
+                System.err.println("[PEER " + self.id() + "] Cannot publish status: MQTT client not connected.");
                 return;
             }
         }
@@ -718,7 +720,7 @@ public class ProductionLineNode {
             message.setQos(1);  // at least 1 message
             mqttClient.publish(topic, message);
         } catch (Exception e) {
-            System.err.println("[LINEA " + self.id() + "] ❌ Error publishing MQTT status: " + e.getMessage());
+            System.err.println("[PEER " + self.id() + "] ❌ Error publishing MQTT status: " + e.getMessage());
         }
     }
 
@@ -745,7 +747,7 @@ public class ProductionLineNode {
             }, "MQTT-Status-Publisher-Node-" + self.id()).start();
             
         } catch (Exception e) {
-            System.err.println("[LINEA " + self.id() + "] Error building MQTT status payload: " + e.getMessage());
+            System.err.println("[PEER " + self.id() + "] Error building MQTT status payload: " + e.getMessage());
         }
     }
 
@@ -772,7 +774,7 @@ public class ProductionLineNode {
 
     public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer) {
         deferredObservers.put(peerId, observer);
-        System.out.println("[LINEA " + self.id() + "] Deferring reply to Node " + peerId);
+        System.out.println("[PEER " + self.id() + "] Deferring reply to Node " + peerId);
     }
 
     public synchronized List<StreamObserver<CalibrationReply>> getAndClearDeferredObservers() {

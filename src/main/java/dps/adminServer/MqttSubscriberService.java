@@ -23,7 +23,7 @@ public class MqttSubscriberService implements MqttCallback {
     @Value("${mqtt.broker.url:tcp://localhost:1883}")
     private String brokerUrl;
 
-    private final String clientId = "smartfab-admin-server";
+    private final String clientId = "smartfab-admin-server-" + java.util.UUID.randomUUID().toString().substring(0, 8);
 
     public MqttSubscriberService(ProductionLineRegistry registry) {
         this.registry = registry;
@@ -31,6 +31,8 @@ public class MqttSubscriberService implements MqttCallback {
 
     @PostConstruct
     public void start() {
+        // Redirect server-side standard console output to LogUtils
+        dps.common.util.LogUtils.redirectSystemOutAndErr("SERVER", dps.common.util.LogUtils.ANSI_CYAN);
         try {
             mqttClient = new MqttClient(brokerUrl, clientId, new MemoryPersistence());
             mqttClient.setCallback(this);
