@@ -582,8 +582,17 @@ public class ProductionLineNode {
                             .setTimestamp(requestTimestamp)
                             .build();
 
-                    // Send request with Timeout of 10 seconds for reply response
-                    stub.withDeadlineAfter(10, TimeUnit.SECONDS).requestCalibration(request);
+                    /*
+                     * Send request with a 60-second timeout.
+                     * Why 60 seconds:
+                     * 1) Queue Accumulation: When multiple nodes (e.g. 5) want to calibrate concurrently,
+                     *    their calibration times (up to 7 seconds each) accumulate in the queue. A 60-second
+                     *    deadline ensures healthy waiting nodes do not time out prematurely, preserving mutual exclusion.
+                     * 2) Crash Handling (Section 10.2): If a peer process crashes, the OS closes the TCP socket immediately.
+                     *    gRPC detects this instantly (throwing UNAVAILABLE in milliseconds), meaning we don't wait 60s
+                     *    to recover from a standard process crash. The 60s deadline is just a backup for silent hangs.
+                     */
+                    stub.withDeadlineAfter(60, TimeUnit.SECONDS).requestCalibration(request);
 
                     // Reply received successfully
                     incrementRepliesReceived(); // increment replies counter
