@@ -73,29 +73,49 @@ public class LogUtils {
     public static void log(String role, String state, String message, String roleColor, String stateColor) {
         String timestamp = LocalTime.now().format(formatter);
         
-        // 1. Build console message with ANSI colors
+        // 1. Format Role
+        String roleToken = "[" + role + "]";
+        String paddedRoleToken = padRight(roleToken, 10);
+        
+        // 2. Format State
+        String stateToken = (state != null && !state.isEmpty()) ? "[" + state + "]" : "";
+        String paddedStateToken = padRight(stateToken, 26);
+
+        // 3. Build Console Line with Colors
         StringBuilder consoleSb = new StringBuilder();
         consoleSb.append("[").append(timestamp).append("] ");
         
         if (roleColor != null) {
-            consoleSb.append(roleColor).append(ANSI_BOLD).append("[").append(role).append("]").append(ANSI_RESET).append(" ");
+            consoleSb.append(roleColor).append(ANSI_BOLD).append(roleToken).append(ANSI_RESET);
+            consoleSb.append(" ".repeat(Math.max(0, 10 - roleToken.length())));
         } else {
-            consoleSb.append("[").append(role).append("] ");
+            consoleSb.append(paddedRoleToken);
         }
+        consoleSb.append(" ");
         
-        if (state != null && !state.isEmpty()) {
-            if (stateColor != null) {
-                consoleSb.append(stateColor).append("[").append(state).append("]").append(ANSI_RESET).append(" ");
-            } else {
-                consoleSb.append("[").append(state).append("] ");
-            }
+        if (stateColor != null && !stateToken.isEmpty()) {
+            consoleSb.append(stateColor).append(stateToken).append(ANSI_RESET);
+            consoleSb.append(" ".repeat(Math.max(0, 26 - stateToken.length())));
+        } else {
+            consoleSb.append(paddedStateToken);
         }
+        consoleSb.append(" ");
         
         consoleSb.append(message);
         originalOut.println(consoleSb.toString());
 
-        // 2. Write the colorized console message to the shared log file so that 'tail -f' shows colors too
+        // 4. Write the colorized console message to the shared log file so that 'tail -f' shows colors too
         writeToLogFile(consoleSb.toString());
+    }
+
+    private static String padRight(String text, int length) {
+        if (text == null) {
+            text = "";
+        }
+        if (text.length() >= length) {
+            return text;
+        }
+        return text + " ".repeat(length - text.length());
     }
 
     /**

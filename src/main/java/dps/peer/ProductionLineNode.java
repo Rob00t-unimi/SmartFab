@@ -290,13 +290,13 @@ public class ProductionLineNode {
                     // Executing the gRPC call with a 3-second timeout to a gRPC server of another peer
                     PresentationResponse response = stub.withDeadlineAfter(3, TimeUnit.SECONDS).present(request);
                     if (response.getAccepted()) {
-                        System.out.println("[PEER " + self.id() + "] gRPC presentation ACCEPTED by Node " + peer.id());
+                        System.out.println("[PEER " + self.id() + "] [" + getState() + "] gRPC presentation ACCEPTED by Node " + peer.id());
                     } else {
-                        System.out.println("[PEER " + self.id() + "] ⚠️ gRPC presentation REJECTED by Node " + peer.id());
+                        System.out.println("[PEER " + self.id() + "] [" + getState() + "] ⚠️ gRPC presentation REJECTED by Node " + peer.id());
                     }
 
                 } catch (Exception e) {
-                    System.err.println("[PEER " + self.id() + "] ❌ gRPC presentation FAILED to Node " + peer.id() + " - Error: " + e.getMessage());
+                    System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ gRPC presentation FAILED to Node " + peer.id() + " - Error: " + e.getMessage());
                 } finally {
                     if (channel != null) {
                         try {
@@ -522,7 +522,7 @@ public class ProductionLineNode {
     private synchronized void transitionToWaitingForCalibration(double average) {
         setState(OperationalState.WAITING_FOR_CALIBRATION);
 
-        System.out.println("[PEER " + self.id() + "] [FULLY_OPERATIONAL -> WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
+        System.out.println("[PEER " + self.id() + "] [WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
                 + String.format("%.2f", average) + " exceeded threshold " + vibrationThreshold + "! Pausing sensor, clearing buffer, and requesting calibration...");
 
         sensor.pauseMeasuring();
@@ -553,11 +553,11 @@ public class ProductionLineNode {
         }
 
         if (currentPeers.isEmpty()) {
-            System.out.println("[PEER " + self.id() + "] No peers in topology. No replies needed.");
+            System.out.println("[PEER " + self.id() + "] [" + getState() + "] No peers in topology. No replies needed.");
             return;
         }
 
-        System.out.println("[PEER " + self.id() + "] Requesting calibration from " + currentPeers.size() 
+        System.out.println("[PEER " + self.id() + "] [" + getState() + "] Requesting calibration from " + currentPeers.size() 
                 + " peer(s) in parallel (Clock: " + requestTimestamp 
                 + ", Criticality: " + String.format("%.4f", requestCriticality) + ")...");
 
@@ -587,10 +587,10 @@ public class ProductionLineNode {
 
                     // Reply received successfully
                     incrementRepliesReceived(); // increment replies counter
-                    System.out.println("[PEER " + self.id() + "] Received CalibrationReply from Node " + peer.id());
+                    System.out.println("[PEER " + self.id() + "] [" + getState() + "] Received CalibrationReply from Node " + peer.id());
 
                 } catch (Exception e) {
-                    System.err.println("[PEER " + self.id() + "] ❌ Failed to get CalibrationReply from Node " 
+                    System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ Failed to get CalibrationReply from Node " 
                             + peer.id() + " - Error: " + e.getMessage());
                     // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
                     incrementRepliesReceived();
@@ -637,7 +637,7 @@ public class ProductionLineNode {
         synchronized (this) {
             while (getRepliesReceived() < requiredReplies) {
                 try {
-                    System.out.println("[PEER " + self.id() + "] Waiting for replies... (Progress: " 
+                    System.out.println("[PEER " + self.id() + "] [" + getState() + "] Waiting for replies... (Progress: " 
                             + getRepliesReceived() + "/" + requiredReplies + ")");
                     wait();
                 } catch (InterruptedException e) {
@@ -675,7 +675,7 @@ public class ProductionLineNode {
             observers = getAndClearDeferredObservers();     // get the observers accumulated when calibration was locked by this
         }
 
-        System.out.println("[PEER " + self.id() + "] [UNDER_CALIBRATION -> FULLY_OPERATIONAL] Calibration completed. Releasing " 
+        System.out.println("[PEER " + self.id() + "] [FULLY_OPERATIONAL] Calibration completed. Releasing " 
                 + observers.size() + " deferred replies...");
 
         for (StreamObserver<CalibrationReply> observer : observers) {       // iterate on the observers
@@ -683,13 +683,13 @@ public class ProductionLineNode {
                 observer.onNext(CalibrationReply.getDefaultInstance());     // send consensus reply
                 observer.onCompleted();     // close connection with peer (client)
             } catch (Exception e) {
-                System.err.println("[PEER " + self.id() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
+                System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
             }
         }
 
         // Restart physical sensor measuring loop
         sensor.startMeasuring();
-        System.out.println("[PEER " + self.id() + "] Physical sensor simulator resumed.");
+        System.out.println("[PEER " + self.id() + "] [" + getState() + "] Physical sensor simulator resumed.");
     }
 
     public synchronized OperationalState getState() {
@@ -774,7 +774,7 @@ public class ProductionLineNode {
 
     public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer, String reason) {
         deferredObservers.put(peerId, observer);
-        System.out.println("[PEER " + self.id() + "] Deferring reply to Node " + peerId + " - Reason: " + reason);
+        System.out.println("[PEER " + self.id() + "] [" + getState() + "] Deferring reply to Node " + peerId + " - Reason: " + reason);
     }
 
     public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer) {

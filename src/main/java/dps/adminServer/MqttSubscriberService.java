@@ -81,7 +81,6 @@ public class MqttSubscriberService implements MqttCallback {
     @Override
     public void messageArrived(String topic, MqttMessage message) throws Exception {
         String payload = new String(message.getPayload());
-        System.out.println("[ADMIN_SERVER] Received MQTT message on topic: " + topic);
 
         try {
             ObjectMapper mapper = new ObjectMapper();
@@ -92,8 +91,7 @@ public class MqttSubscriberService implements MqttCallback {
             if (topic.endsWith("/status")) {
                 String stateStr = root.get("state").asText();
                 OperationalState state = OperationalState.valueOf(stateStr);
-                registry.updateState(id, state);    // update on registry
-                System.out.println("[ADMIN_SERVER] [MQTT-STATUS] Updated state of node " + id + " to " + state);
+                registry.updateState(id, state);    // update on registry (handles logging itself)
 
             // Update registry with all telemetries
             } else if (topic.endsWith("/telemetry")) {
@@ -106,7 +104,7 @@ public class MqttSubscriberService implements MqttCallback {
                         registry.addTelemetry(id, avg, timestamp);
                         count++;
                     }
-                    System.out.println("[ADMIN_SERVER] [MQTT-TELEMETRY] Added " + count + " telemetry average(s) for node " + id);
+                    System.out.println("[ADMIN_SERVER] [TELEMETRY] Added " + count + " measurement(s) from Peer " + id);
                 }
             }
         } catch (Exception e) {

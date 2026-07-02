@@ -129,7 +129,6 @@ public class ProductionLineRegistry {
         if (data != null) {
             // Locking only the specific line
             data.addTelemetry(average, timestamp);
-            System.out.println("[ADMIN_SERVER] Added telemetry for Node " + id + ": average vibration = " + average);
         } else {
             System.err.println("[ADMIN_SERVER] Telemetry update failed: Node " + id + " not found in registry.");
         }
