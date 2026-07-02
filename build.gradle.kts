@@ -69,3 +69,12 @@ tasks.register<JavaExec>("runPeer") {
         args(project.property("args").toString().split(" "))
     }
 }
+
+tasks.register<JavaExec>("runClient") {
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dps.adminClient.AdminClientApp")
+    standardInput = System.`in`
+    if (project.hasProperty("args")) {
+        args(project.property("args").toString().split(" "))
+    }
+}
