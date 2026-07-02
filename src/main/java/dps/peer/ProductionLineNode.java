@@ -29,8 +29,10 @@ import sensor.MonitoringSensor;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -61,8 +63,8 @@ public class ProductionLineNode {
     private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();   // deferred response queue (pending gRPC StreamObserver)
     private double lastCalculatedAverage = 0.0;
     
-    // Reply count tracking
-    private int repliesReceived = 0;
+    // Reply tracking by peer ID
+    private final Set<Integer> repliesReceived = new HashSet<>();
 
     // MQTT client configuration
     private MqttClient mqttClient;
@@ -595,14 +597,14 @@ public class ProductionLineNode {
                     stub.withDeadlineAfter(60, TimeUnit.SECONDS).requestCalibration(request);
 
                     // Reply received successfully
-                    incrementRepliesReceived(); // increment replies counter
+                    addReply(peer.id());
                     System.out.println("[PEER " + self.id() + "] [" + getState() + "] Received CalibrationReply from Node " + peer.id());
 
                 } catch (Exception e) {
                     System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ Failed to get CalibrationReply from Node " 
                             + peer.id() + " - Error: " + e.getMessage());
                     // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
-                    incrementRepliesReceived();
+                    addReply(peer.id());
                 } finally {
                     if (channel != null) {
                         try {
@@ -805,17 +807,26 @@ public class ProductionLineNode {
     }
 
     // Reply tracking methods
-    public synchronized void incrementRepliesReceived() {
-        repliesReceived++;
+    public synchronized void addReply(int peerId) {
+        repliesReceived.add(peerId);
         notifyAll(); // Wake up thread waiting for replies
     }
 
+    public synchronized void removeReply(int peerId) {
+        repliesReceived.remove(peerId);
+        notifyAll(); // Wake up thread in case count drops
+    }
+
+    public synchronized void incrementRepliesReceived() {
+        addReply(-repliesReceived.size() - 1); // backward compatibility helper
+    }
+
     public synchronized int getRepliesReceived() {
-        return repliesReceived;
+        return repliesReceived.size();
     }
 
     public synchronized void resetRepliesReceived() {
-        repliesReceived = 0;
+        repliesReceived.clear();
     }
 
     public ProductionLine getSelf() {

@@ -87,6 +87,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
 
             boolean defer = false;
             String decisionReason = "";
+            boolean yieldToSender = false;
 
             synchronized (node) {
                 OperationalState localState = node.getState();  // get current local state
@@ -112,13 +113,28 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                         } else {
                             decisionReason = String.format("local WAITING with equal criticality (%.4f) but lower ID (local: %d < sender: %d) [tie-breaker]", 
                                     localCriticality, localId, senderId);
+                            yieldToSender = true;
                         }
                     } else {
                         decisionReason = String.format("local WAITING with lower criticality (local: %.4f < sender: %.4f)", 
                                 localCriticality, senderCriticality);
+                        yieldToSender = true;
                     }
                 } else {
                     decisionReason = "local node is FULLY_OPERATIONAL";
+                }
+
+                if (!defer && yieldToSender) {
+                    /*
+                     * Yielding logic for Adapted Ricart-Agrawala (Section 4.3.2):
+                     * Since priority is based on dynamic criticality rather than Lamport clocks, a later request
+                     * with higher criticality can preempt an earlier request.
+                     * If we yield to a higher-priority sender, we must invalidate/remove any reply we previously
+                     * received from them. This prevents both nodes from holding each other's replies simultaneously,
+                     * guaranteeing strict mutual exclusion. The local node will wait for this sender to finish
+                     * and send a fresh reply later.
+                     */
+                    node.removeReply(senderId);
                 }
             }
 
