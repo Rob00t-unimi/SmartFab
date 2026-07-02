@@ -582,8 +582,8 @@ public class ProductionLineNode {
                             .setTimestamp(requestTimestamp)
                             .build();
 
-                    // Send request with Timeout of 5 seconds for reply response
-                    stub.withDeadlineAfter(5, TimeUnit.SECONDS).requestCalibration(request);
+                    // Send request with Timeout of 10 seconds for reply response
+                    stub.withDeadlineAfter(10, TimeUnit.SECONDS).requestCalibration(request);
 
                     // Reply received successfully
                     incrementRepliesReceived(); // increment replies counter
