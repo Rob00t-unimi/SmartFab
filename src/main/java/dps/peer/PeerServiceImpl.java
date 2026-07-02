@@ -86,6 +86,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
             node.updateClockOnReceive(senderTimestamp);
 
             boolean defer = false;
+            String decisionReason = "";
 
             synchronized (node) {
                 OperationalState localState = node.getState();  // get current local state
@@ -94,27 +95,41 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                 if (localState == OperationalState.UNDER_CALIBRATION) {
                     // We are currently in calibration, so we have the resource. Defer the reply.
                     defer = true;
+                    decisionReason = "local node is already UNDER_CALIBRATION";
                 } else if (localState == OperationalState.WAITING_FOR_CALIBRATION) {
                     // Both want the resource. Compare priority (criticality then ID)
                     double localCriticality = node.calcCriticality();
 
                     if (localCriticality > senderCriticality) {
                         defer = true;
+                        decisionReason = String.format("local WAITING with higher criticality (local: %.4f > sender: %.4f)", 
+                                localCriticality, senderCriticality);
                     } else if (localCriticality == senderCriticality) {
                         if (localId > senderId) {
                             defer = true;
+                            decisionReason = String.format("local WAITING with equal criticality (%.4f) but higher ID (local: %d > sender: %d) [tie-breaker]", 
+                                    localCriticality, localId, senderId);
+                        } else {
+                            decisionReason = String.format("local WAITING with equal criticality (%.4f) but lower ID (local: %d < sender: %d) [tie-breaker]", 
+                                    localCriticality, localId, senderId);
                         }
+                    } else {
+                        decisionReason = String.format("local WAITING with lower criticality (local: %.4f < sender: %.4f)", 
+                                localCriticality, senderCriticality);
                     }
+                } else {
+                    decisionReason = "local node is FULLY_OPERATIONAL";
                 }
             }
 
             if (defer) {
                 // Store the observer in the deferred list
-                node.addDeferredObserver(senderId, responseObserver);
+                node.addDeferredObserver(senderId, responseObserver, decisionReason);
             } else {
                 // Reply immediately
                 System.out.println("[PEER " + node.getSelf().id() + "] Replying IMMEDIATELY to calibration request from Node " 
-                        + senderId + " (Clock: " + senderTimestamp + ", Criticality: " + String.format("%.4f", senderCriticality) + ")");
+                        + senderId + " (Clock: " + senderTimestamp + ", Criticality: " + String.format("%.4f", senderCriticality) 
+                        + ") - Reason: " + decisionReason);
 
                 CalibrationReply reply = CalibrationReply.getDefaultInstance();
                 responseObserver.onNext(reply);

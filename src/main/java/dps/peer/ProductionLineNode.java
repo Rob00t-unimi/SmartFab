@@ -772,9 +772,13 @@ public class ProductionLineNode {
         logicalClock = Math.max(logicalClock, receivedTime) + 1;
     }
 
-    public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer) {
+    public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer, String reason) {
         deferredObservers.put(peerId, observer);
-        System.out.println("[PEER " + self.id() + "] Deferring reply to Node " + peerId);
+        System.out.println("[PEER " + self.id() + "] Deferring reply to Node " + peerId + " - Reason: " + reason);
+    }
+
+    public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer) {
+        addDeferredObserver(peerId, observer, "none");
     }
 
     public synchronized List<StreamObserver<CalibrationReply>> getAndClearDeferredObservers() {
