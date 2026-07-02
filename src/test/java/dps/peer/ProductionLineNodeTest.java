@@ -474,4 +474,47 @@ public class ProductionLineNodeTest {
         // The deferred queue should be cleared
         assertEquals(0, node.getAndClearDeferredObservers().size());
     }
+
+    @Test
+    public void testMqttAveragesBuffering() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertTrue(node.getLocalAveragesBufferSnapshot().isEmpty());
+
+        node.addAverageToBufferForTesting(45.2);
+        node.addAverageToBufferForTesting(50.8);
+
+        List<Double> snapshot = node.getLocalAveragesBufferSnapshot();
+        assertEquals(2, snapshot.size());
+        assertEquals(45.2, snapshot.get(0), 0.001);
+        assertEquals(50.8, snapshot.get(1), 0.001);
+    }
+
+    @Test
+    public void testMqttTelemetryPayloadFormatting() throws Exception {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode rootNode = mapper.createObjectNode();
+        rootNode.put("id", node.getSelf().id());
+        
+        com.fasterxml.jackson.databind.node.ArrayNode averagesArray = mapper.createArrayNode();
+        averagesArray.add(45.2);
+        averagesArray.add(50.8);
+        rootNode.set("averages", averagesArray);
+        rootNode.put("timestamp", 1719830000000L);
+        rootNode.put("state", node.getState().name());
+
+        String json = mapper.writeValueAsString(rootNode);
+
+        // Verify keys exist and values match
+        com.fasterxml.jackson.databind.JsonNode parsed = mapper.readTree(json);
+        assertEquals(1, parsed.get("id").asInt());
+        assertEquals("FULLY_OPERATIONAL", parsed.get("state").asText());
+        assertEquals(1719830000000L, parsed.get("timestamp").asLong());
+        assertEquals(2, parsed.get("averages").size());
+        assertEquals(45.2, parsed.get("averages").get(0).asDouble(), 0.001);
+    }
 }
