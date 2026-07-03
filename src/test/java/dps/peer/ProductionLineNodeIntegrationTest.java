@@ -2,7 +2,7 @@ package dps.peer;
 
 import dps.common.model.ProductionLine;
 import dps.common.model.OperationalState;
-import dps.adminServer.ProductionLineRegistry;
+import dps.adminServer.service.ProductionLineRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

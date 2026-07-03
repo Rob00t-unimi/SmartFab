@@ -3,7 +3,7 @@ package dps.adminClient;
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.common.model.ProductionLineStatus;
-import dps.adminServer.ProductionLineRegistry;
+import dps.adminServer.service.ProductionLineRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

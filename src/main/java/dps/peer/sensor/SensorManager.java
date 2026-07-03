@@ -3,7 +3,6 @@ package dps.peer.sensor;
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.ProductionLineNode;
-import dps.peer.SlidingWindowBuffer;
 import sensor.Measurement;
 import sensor.MonitoringSensor;
 

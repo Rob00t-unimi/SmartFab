@@ -1,7 +1,8 @@
-package dps.peer;
+package dps.peer.net;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.peer.ProductionLineNode;
 import dps.peer.coordinator.RicartAgrawalaCoordinator;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;

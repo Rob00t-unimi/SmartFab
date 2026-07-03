@@ -1,5 +1,6 @@
 package dps.adminServer;
 
+import dps.adminServer.service.ProductionLineRegistry;
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import org.junit.jupiter.api.BeforeEach;

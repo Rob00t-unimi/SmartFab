@@ -1,5 +1,6 @@
 package dps.peer;
 
+import dps.peer.sensor.SlidingWindowBuffer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import sensor.Measurement;

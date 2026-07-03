@@ -1,6 +1,6 @@
-package dps.adminServer;
+package dps.adminServer.controller;
 
-import dps.common.model.OperationalState;
+import dps.adminServer.service.ProductionLineRegistry;
 import dps.common.model.ProductionLine;
 import dps.common.model.ProductionLineStatus;
 import org.springframework.http.HttpStatus;

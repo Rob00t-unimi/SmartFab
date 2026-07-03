@@ -2,7 +2,6 @@ package dps.peer.net;
 
 import dps.common.model.ProductionLine;
 import dps.peer.ProductionLineNode;
-import dps.peer.PeerServiceImpl;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
 import dps.peer.proto.PresentationRequest;

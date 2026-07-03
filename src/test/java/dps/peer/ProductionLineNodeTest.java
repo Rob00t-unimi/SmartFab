@@ -3,6 +3,7 @@ package dps.peer;
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.config.NodeConfig;
+import dps.peer.net.PeerServiceImpl;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.PeerServiceGrpc;

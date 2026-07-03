@@ -1,4 +1,4 @@
-package dps.peer;
+package dps.peer.sensor;
 
 import sensor.Buffer;
 import sensor.Measurement;
