@@ -60,6 +60,8 @@ public class ProductionLineNode {
 
     // Ricart-Agrawala variables
     private long logicalClock = 0;
+    private long requestTimestamp = 0;
+    private double requestCriticality = 0.0;
     private final Map<Integer, StreamObserver<CalibrationReply>> deferredObservers = new HashMap<>();   // deferred response queue (pending gRPC StreamObserver)
     private double lastCalculatedAverage = 0.0;
     
@@ -541,11 +543,82 @@ public class ProductionLineNode {
      * Ricart-Agrawala client: increments the Lamport clock, calculates criticality based on the threshold being exceeded, and resets the response counter.
      * Sends a gRPC request for calibration to all active peers in parallel.
      */
+    public synchronized ProductionLine getPeerById(int id) {
+        return peers.get(id);
+    }
+
+    /**
+     * Sends a calibration request to a single target peer asynchronously.
+     * This is used both during initial broadcast and when yielding to a higher-priority peer.
+     * By re-sending a request to the higher-priority peer we yielded to, we force that peer (which
+     * is currently waiting or calibrating) to defer us and add us to its deferredObservers list,
+     * ensuring it replies to us when it finishes calibrating. This prevents dynamic priority deadlocks.
+     */
+    public void sendCalibrationRequestToPeerAsynchronously(ProductionLine peer) {
+        new Thread(() -> {
+            sendCalibrationRequestToPeer(peer);
+        }, "Re-Request-Thread-Node-" + self.id() + "-to-" + peer.id()).start();
+    }
+
+    /**
+     * Executes the blocking gRPC call to request calibration from a single peer.
+     */
+    public void sendCalibrationRequestToPeer(ProductionLine peer) {
+        double reqCriticality;
+        long reqTimestamp;
+        synchronized (this) {
+            reqCriticality = this.requestCriticality;
+            reqTimestamp = this.requestTimestamp;
+        }
+
+        ManagedChannel channel = null;
+        try {
+            channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
+                    .usePlaintext()
+                    .build();
+
+            PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
+
+            CalibrationRequest request = CalibrationRequest.newBuilder()
+                    .setSenderId(self.id())
+                    .setCriticality(reqCriticality)
+                    .setTimestamp(reqTimestamp)
+                    .build();
+
+            /*
+             * Send request with a 60-second timeout.
+             * Why 60 seconds:
+             * 1) Queue Accumulation: When multiple nodes want to calibrate concurrently,
+             *    their calibration times (up to 7 seconds each) accumulate in the queue. A 60-second
+             *    deadline ensures healthy waiting nodes do not time out prematurely, preserving mutual exclusion.
+             * 2) Crash Handling (Section 10.2): If a peer process crashes, the OS closes the TCP socket immediately.
+             *    gRPC detects this instantly (throwing UNAVAILABLE in milliseconds), meaning we don't wait 60s
+             *    to recover from a standard process crash.
+             */
+            stub.withDeadlineAfter(60, TimeUnit.SECONDS).requestCalibration(request);
+
+            // Reply received successfully
+            addReply(peer.id());
+            System.out.println("[PEER " + self.id() + "] [" + getState() + "] Received CalibrationReply from Node " + peer.id());
+
+        } catch (Exception e) {
+            System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ Failed to get CalibrationReply from Node " 
+                    + peer.id() + " - Error: " + e.getMessage());
+            // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
+            addReply(peer.id());
+        } finally {
+            if (channel != null) {
+                try {
+                    channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+    }
+
     public void requestCalibration() {
         List<ProductionLine> currentPeers = getPeers(); // synchronized
-
-        long requestTimestamp;
-        double requestCriticality;
 
         synchronized (this) {
             incrementClock(); // send event -> increment Lamport's clock
@@ -563,64 +636,9 @@ public class ProductionLineNode {
                 + " peer(s) in parallel (Clock: " + requestTimestamp 
                 + ", Criticality: " + String.format("%.4f", requestCriticality) + ")...");
 
-        ExecutorService executor = Executors.newCachedThreadPool();     // crate thread pool to send gRPC requests in parallel
-
         for (ProductionLine peer : currentPeers) {
-            executor.submit(() -> {     // for each peer create a thread and start the task assigned without waiting other threads
-                ManagedChannel channel = null;
-                try {
-                    // create gRPC channel
-                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())
-                            .usePlaintext()
-                            .build();
-
-                    // create stub gRPC
-                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel);
-
-                    // construct message
-                    CalibrationRequest request = CalibrationRequest.newBuilder()
-                            .setSenderId(self.id())
-                            .setCriticality(requestCriticality)
-                            .setTimestamp(requestTimestamp)
-                            .build();
-
-                    /*
-                     * Send request with a 60-second timeout.
-                     * Why 60 seconds:
-                     * 1) Queue Accumulation: When multiple nodes (e.g. 5) want to calibrate concurrently,
-                     *    their calibration times (up to 7 seconds each) accumulate in the queue. A 60-second
-                     *    deadline ensures healthy waiting nodes do not time out prematurely, preserving mutual exclusion.
-                     * 2) Crash Handling (Section 10.2): If a peer process crashes, the OS closes the TCP socket immediately.
-                     *    gRPC detects this instantly (throwing UNAVAILABLE in milliseconds), meaning we don't wait 60s
-                     *    to recover from a standard process crash. The 60s deadline is just a backup for silent hangs.
-                     */
-                    stub.withDeadlineAfter(60, TimeUnit.SECONDS).requestCalibration(request);
-
-                    // Reply received successfully
-                    addReply(peer.id());
-                    System.out.println("[PEER " + self.id() + "] [" + getState() + "] Received CalibrationReply from Node " + peer.id());
-
-                } catch (Exception e) {
-                    System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ Failed to get CalibrationReply from Node " 
-                            + peer.id() + " - Error: " + e.getMessage());
-                    // In case of communication failure or timeout, treat as implicit reply to avoid deadlocks
-                    addReply(peer.id());
-                } finally {
-                    if (channel != null) {
-                        try {
-                            // close gRPC channel
-                            channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                    }
-                }
-            });
+            sendCalibrationRequestToPeerAsynchronously(peer);
         }
-
-        // Shutdown the executor so threads terminate when tasks finish, but return immediately
-        // to avoid blocking the calling thread.
-        executor.shutdown();
     }
 
     public double calcCriticality() {

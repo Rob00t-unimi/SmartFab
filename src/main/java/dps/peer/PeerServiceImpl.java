@@ -135,6 +135,13 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                      * and send a fresh reply later.
                      */
                     node.removeReply(senderId);
+
+                    // Re-request calibration from this higher-priority peer so that they queue/defer us.
+                    // This prevents deadlocks when the higher-priority peer is not currently aware that we are waiting.
+                    ProductionLine senderPeer = node.getPeerById(senderId);
+                    if (senderPeer != null) {
+                        node.sendCalibrationRequestToPeerAsynchronously(senderPeer);
+                    }
                 }
             }
 
