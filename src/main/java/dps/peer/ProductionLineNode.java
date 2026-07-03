@@ -94,7 +94,7 @@ public class ProductionLineNode {
         try {
             NodeConfig config = parseArgs(args);
             // Redirect console output to LogUtils for clean colorized and shared logs
-            dps.common.util.LogUtils.redirectSystemOutAndErr("PEER-" + config.self().id(), dps.common.util.LogUtils.ANSI_GREEN);
+            dps.common.util.LogUtils.redirectSystemOutAndErr("PEER-" + config.self().id(), dps.common.util.LogUtils.getPeerColor(String.valueOf(config.self().id())));
             node = new ProductionLineNode(config.self(), config.serverUrl(), config.mqttBrokerUrl());
 
             System.out.println("[PEER " + node.getSelf().id() + "] Starting node on " + node.getSelf().ip() + ":" + node.getSelf().port());

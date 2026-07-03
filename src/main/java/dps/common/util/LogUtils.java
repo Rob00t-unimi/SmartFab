@@ -154,12 +154,7 @@ public class LogUtils {
             if (endIdx != -1) {
                 String idStr = cleanMessage.substring(startIdx + 6, endIdx).trim();
                 role = "PEER-" + idStr;
-                switch (idStr) {
-                    case "1": roleColor = ANSI_GREEN; break;
-                    case "2": roleColor = ANSI_YELLOW; break;
-                    case "3": roleColor = ANSI_MAGENTA; break;
-                    default: roleColor = ANSI_BLUE; break;
-                }
+                roleColor = getPeerColor(idStr);
                 cleanMessage = cleanMessage.substring(0, startIdx) + cleanMessage.substring(endIdx + 1);
             }
         }
@@ -205,6 +200,37 @@ public class LogUtils {
         }
 
         log(role, state, cleanMessage, roleColor, stateColor);
+    }
+
+    /**
+     * Maps peer IDs to distinct, readable ANSI colors to help distinguish them in console output.
+     */
+    public static String getPeerColor(String idStr) {
+        try {
+            int id = Integer.parseInt(idStr);
+            // Predefined list of 16 distinct, high-contrast colors (standard and 256-color extended codes)
+            String[] peerColors = {
+                "\u001B[32m", // Green
+                "\u001B[33m", // Yellow
+                "\u001B[35m", // Magenta
+                "\u001B[36m", // Cyan
+                "\u001B[38;5;208m", // Orange
+                "\u001B[38;5;13m",  // Light Magenta/Pink
+                "\u001B[38;5;75m",  // Sky Blue
+                "\u001B[38;5;121m", // Light Green
+                "\u001B[38;5;183m", // Lavender
+                "\u001B[38;5;220m", // Gold
+                "\u001B[38;5;203m", // Light Red/Salmon
+                "\u001B[38;5;38m",  // Deep Cyan
+                "\u001B[38;5;142m", // Olive
+                "\u001B[38;5;99m",  // Purple/Violet
+                "\u001B[38;5;172m", // Brown/Orange
+                "\u001B[38;5;85m"   // Mint
+            };
+            return peerColors[(id - 1) % peerColors.length];
+        } catch (NumberFormatException e) {
+            return ANSI_BLUE;
+        }
     }
 
     /**
