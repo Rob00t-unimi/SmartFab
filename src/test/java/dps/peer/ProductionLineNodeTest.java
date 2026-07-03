@@ -2,6 +2,7 @@ package dps.peer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.peer.config.NodeConfig;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.PeerServiceGrpc;
@@ -18,7 +19,7 @@ public class ProductionLineNodeTest {
     @Test
     public void testValidArgumentsWithDefaultServerUrl() {
         String[] args = {"1", "127.0.0.1", "5001"};
-        ProductionLineNode.NodeConfig config = ProductionLineNode.parseArgs(args);
+        NodeConfig config = NodeConfig.parseArgs(args);
 
         assertNotNull(config);
         assertEquals(1, config.self().id());
@@ -30,7 +31,7 @@ public class ProductionLineNodeTest {
     @Test
     public void testValidArgumentsWithCustomServerUrl() {
         String[] args = {"2", "localhost", "5002", "http://192.168.1.100:9000"};
-        ProductionLineNode.NodeConfig config = ProductionLineNode.parseArgs(args);
+        NodeConfig config = NodeConfig.parseArgs(args);
 
         assertNotNull(config);
         assertEquals(2, config.self().id());
@@ -43,7 +44,7 @@ public class ProductionLineNodeTest {
     public void testInsufficientArguments() {
         String[] args = {"1", "127.0.0.1"};
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            ProductionLineNode.parseArgs(args);
+            NodeConfig.parseArgs(args);
         });
         assertTrue(exception.getMessage().contains("Insufficient arguments"));
     }
@@ -52,7 +53,7 @@ public class ProductionLineNodeTest {
     public void testInvalidIdFormat() {
         String[] args = {"abc", "127.0.0.1", "5001"};
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            ProductionLineNode.parseArgs(args);
+            NodeConfig.parseArgs(args);
         });
         assertTrue(exception.getMessage().contains("ID must be an integer"));
     }
@@ -61,7 +62,7 @@ public class ProductionLineNodeTest {
     public void testInvalidPortFormat() {
         String[] args = {"1", "127.0.0.1", "xyz"};
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            ProductionLineNode.parseArgs(args);
+            NodeConfig.parseArgs(args);
         });
         assertTrue(exception.getMessage().contains("Port must be an integer"));
     }
@@ -70,7 +71,7 @@ public class ProductionLineNodeTest {
     public void testNegativeId() {
         String[] args = {"-1", "127.0.0.1", "5001"};
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            ProductionLineNode.parseArgs(args);
+            NodeConfig.parseArgs(args);
         });
         assertTrue(exception.getMessage().contains("ID must be non-negative"));
     }
@@ -79,7 +80,7 @@ public class ProductionLineNodeTest {
     public void testInvalidIpAddress() {
         String[] args = {"1", "999.999.999.999", "5001"};
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            ProductionLineNode.parseArgs(args);
+            NodeConfig.parseArgs(args);
         });
         assertTrue(exception.getMessage().contains("Invalid IP address format"));
     }
@@ -88,7 +89,7 @@ public class ProductionLineNodeTest {
     public void testInvalidPortRange() {
         String[] args = {"1", "127.0.0.1", "80"};
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            ProductionLineNode.parseArgs(args);
+            NodeConfig.parseArgs(args);
         });
         assertTrue(exception.getMessage().contains("Port must be between 1024 and 65535"));
     }

@@ -2,6 +2,7 @@ package dps.peer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.peer.config.NodeConfig;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
@@ -38,8 +39,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class ProductionLineNode {
-
-    public record NodeConfig(ProductionLine self, String serverUrl, String mqttBrokerUrl) {}
 
     // Map of active peers, manually synchronized on 'this'
     private final Map<Integer, ProductionLine> peers = new HashMap<>();
@@ -92,7 +91,7 @@ public class ProductionLineNode {
     public static void main(String[] args) {
         ProductionLineNode node = null;
         try {
-            NodeConfig config = parseArgs(args);
+            NodeConfig config = NodeConfig.parseArgs(args);
             // Redirect console output to LogUtils for clean colorized and shared logs
             dps.common.util.LogUtils.redirectSystemOutAndErr("PEER-" + config.self().id(), dps.common.util.LogUtils.getPeerColor(String.valueOf(config.self().id())));
             node = new ProductionLineNode(config.self(), config.serverUrl(), config.mqttBrokerUrl());
@@ -141,35 +140,7 @@ public class ProductionLineNode {
         }
     }
 
-    public static NodeConfig parseArgs(String[] args) {
-        if (args == null || args.length < 3) {
-            throw new IllegalArgumentException("Insufficient arguments. ID, IP, and Port are required.");
-        }
 
-        int id;
-        try {
-            id = Integer.parseInt(args[0]);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("ID must be an integer.");
-        }
-
-        String ip = args[1];
-
-        int port;
-        try {
-            port = Integer.parseInt(args[2]);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Port must be an integer.");
-        }
-
-        String serverUrl = args.length >= 4 ? args[3] : "http://localhost:8080";
-        String mqttBrokerUrl = args.length >= 5 ? args[4] : "tcp://localhost:1883";
-
-        // This will perform the internal validations of the ProductionLine record (IP format, port range, etc.)
-        ProductionLine self = new ProductionLine(id, ip, port);
-
-        return new NodeConfig(self, serverUrl, mqttBrokerUrl);
-    }
 
     /**
      * Starts the local gRPC Server on the configured port.
