@@ -4,6 +4,7 @@ import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.config.NodeConfig;
 import dps.peer.net.NetworkManager;
+import dps.peer.mqtt.MqttManager;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
@@ -65,13 +66,8 @@ public class ProductionLineNode {
     // Reply tracking by peer ID
     private final Set<Integer> repliesReceived = new HashSet<>();
 
-    // MQTT client configuration
-    private MqttClient mqttClient;
     private final String mqttBrokerUrl;
-
-    // MQTT buffer and publisher thread
-    private final List<Double> localAveragesBuffer = new ArrayList<>();     // local averages from sensor to send via mqtt
-    private Thread mqttPublisherThread; // 10 seconds cycle mqtt thread
+    private final MqttManager mqttManager;
 
     public ProductionLineNode(ProductionLine self, String serverUrl) {
         this(self, serverUrl, "tcp://localhost:1883");
@@ -85,6 +81,15 @@ public class ProductionLineNode {
         this.serverUrl = serverUrl;
         this.mqttBrokerUrl = mqttBrokerUrl;
         this.networkManager = new NetworkManager(this, self, serverUrl);
+        this.mqttManager = new MqttManager(this, self, mqttBrokerUrl);
+    }
+
+    public MqttManager getMqttManager() {
+        return mqttManager;
+    }
+
+    public boolean isRunning() {
+        return running;
     }
 
     public NetworkManager getNetworkManager() {
@@ -175,9 +180,7 @@ public class ProductionLineNode {
                     setLastCalculatedAverage(average);
 
                     // Buffer the average for MQTT telemetry
-                    synchronized (localAveragesBuffer) {
-                        localAveragesBuffer.add(average);
-                    }
+                    mqttManager.addAverage(average);
 
                     System.out.println("[PEER " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
                             + String.format("%.2f", average) + " (Threshold: " + vibrationThreshold + ")");
@@ -199,7 +202,7 @@ public class ProductionLineNode {
         monitoringThread.start();   // start the thread
 
         // Start periodic MQTT telemetry thread
-        startMqttTelemetryPublishing();
+        mqttManager.startMqttTelemetryPublishing();
     }
 
     /**
@@ -219,120 +222,22 @@ public class ProductionLineNode {
             monitoringThread = null;
         }
 
-        // The MQTT publishing thread is safely stopped via interruption
-        // waiting up to 2 seconds for it to shut down
-        // and the client's TCP socket is closed.
-        if (mqttPublisherThread != null) {
-            mqttPublisherThread.interrupt();
-            try {
-                mqttPublisherThread.join(2000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            mqttPublisherThread = null;
-        }
-        disconnectMqtt(); // Disconnect MQTT client
+        // Stop MQTT publisher and disconnect Paho client
+        mqttManager.stop();
         System.out.println("[PEER " + self.id() + "] Sensor monitoring loop stopped.");
     }
 
-    /**
-     * Connects to the MQTT Broker
-     */
+    // Thread-safe MQTT delegation to MqttManager
     public synchronized void connectMqtt() {
-        try {
-            String clientId = "smartfab-peer-" + self.id();
-            // instantiate client mqtt with eclipse paho.
-            mqttClient = new MqttClient(mqttBrokerUrl, clientId, new MemoryPersistence());  // memory persistence keeps temporary messages not yet sent in RAM instead of in the FS
-            MqttConnectOptions connOpts = new MqttConnectOptions();  // config connection parameters
-            connOpts.setCleanSession(true);
-            
-            System.out.println("[PEER " + self.id() + "] [" + getState() + "] Connecting to MQTT Broker: " + mqttBrokerUrl + "...");
-            mqttClient.connect(connOpts);   // open connection (wait broker response)
-            System.out.println("[PEER " + self.id() + "] [" + getState() + "] Connected to MQTT Broker successfully.");
-        } catch (Exception e) {
-            throw new IllegalStateException("MQTT connection failed to broker " + mqttBrokerUrl + ": " + e.getMessage(), e);
-        }
+        mqttManager.connectMqtt();
     }
 
-    /**
-     * Disconnects from the MQTT Broker
-     */
     public synchronized void disconnectMqtt() {
-        if (mqttClient != null && mqttClient.isConnected()) {
-            try {
-                System.out.println("[PEER " + self.id() + "] [" + getState() + "] Disconnecting from MQTT Broker...");
-                mqttClient.disconnect();
-                mqttClient.close();
-                System.out.println("[PEER " + self.id() + "] [" + getState() + "] Disconnected from MQTT Broker successfully.");
-            } catch (Exception e) {
-                System.err.println("[PEER " + self.id() + "] ❌ Error disconnecting from MQTT Broker: " + e.getMessage());
-            }
-        }
+        mqttManager.disconnectMqtt();
     }
 
-    /**
-     * Publishes telemetry payload to the MQTT Broker.
-     */
     public void publishTelemetry(String payload) {
-        synchronized (this) {
-            if (mqttClient == null || !mqttClient.isConnected()) {
-                System.err.println("[PEER " + self.id() + "] Cannot publish telemetry: MQTT client not connected.");
-                return;
-            }
-        }
-        try {
-            String topic = "smartfab/production-line/" + self.id() + "/telemetry";
-            MqttMessage message = new MqttMessage(payload.getBytes());
-            message.setQos(1);  // guarantees that the message is received at least once
-            mqttClient.publish(topic, message);
-        } catch (Exception e) {
-            System.err.println("[PEER " + self.id() + "] ❌ Error publishing MQTT telemetry: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Starts the periodic thread that publishes collected averages every 10 seconds.
-     */
-    private void startMqttTelemetryPublishing() {
-        mqttPublisherThread = new Thread(() -> {
-            while (running) {
-                try {
-                    Thread.sleep(10000); // Wait 10 seconds
-                    
-                    // Extract and clear the local averages buffer thread-safely
-                    List<Double> averagesToPublish;
-                    synchronized (localAveragesBuffer) {
-                        averagesToPublish = new ArrayList<>(localAveragesBuffer);
-                        localAveragesBuffer.clear();
-                    }
-                    
-                    // Construct JSON payload using Jackson ObjectMapper
-                    ObjectMapper mapper = new ObjectMapper();
-                    ObjectNode rootNode = mapper.createObjectNode();
-                    rootNode.put("id", self.id());
-                    
-                    ArrayNode averagesArray = mapper.createArrayNode();
-                    for (double avg : averagesToPublish) {
-                        averagesArray.add(avg);
-                    }
-                    rootNode.set("averages", averagesArray);
-                    rootNode.put("timestamp", System.currentTimeMillis());
-                    rootNode.put("state", getState().name());
-                    
-                    String payload = mapper.writeValueAsString(rootNode);
-
-                    publishTelemetry(payload); // publish
-                    
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                } catch (Exception e) {
-                    System.err.println("[PEER " + self.id() + "] Error in MQTT telemetry publisher: " + e.getMessage());
-                }
-            }
-        });
-        mqttPublisherThread.setName("MQTT-Telemetry-Publisher-Node-" + self.id());
-        mqttPublisherThread.start();
+        mqttManager.publishTelemetry(payload);
     }
 
     /**
@@ -545,55 +450,12 @@ public class ProductionLineNode {
         OperationalState oldState = this.state;
         this.state = state;
         if (oldState != state) {
-            publishStateUpdate(state);
+            mqttManager.publishStateUpdate(state);
         }
     }
 
-    /**
-     * Publishes status payload to the MQTT Broker.
-     */
     public void publishStatus(String payload) {
-        synchronized (this) {
-            if (mqttClient == null || !mqttClient.isConnected()) {
-                System.err.println("[PEER " + self.id() + "] Cannot publish status: MQTT client not connected.");
-                return;
-            }
-        }
-        try {
-            String topic = "smartfab/production-line/" + self.id() + "/status";
-            MqttMessage message = new MqttMessage(payload.getBytes());
-            message.setQos(1);  // at least 1 message
-            mqttClient.publish(topic, message);
-        } catch (Exception e) {
-            System.err.println("[PEER " + self.id() + "] ❌ Error publishing MQTT status: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Builds and asynchronously publishes state change update.
-     */
-    private void publishStateUpdate(OperationalState newState) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            ObjectNode rootNode = mapper.createObjectNode();
-            rootNode.put("id", self.id());
-            rootNode.put("state", newState.name());
-            rootNode.put("timestamp", System.currentTimeMillis());
-            
-            if (newState == OperationalState.WAITING_FOR_CALIBRATION || newState == OperationalState.UNDER_CALIBRATION) {
-                rootNode.put("criticality", calcCriticality());
-            }
-            
-            String payload = mapper.writeValueAsString(rootNode);
-            
-            // Asynchronously publish to avoid holding the monitor lock of 'this' during network I/O
-            new Thread(() -> {
-                publishStatus(payload);
-            }, "MQTT-Status-Publisher-Node-" + self.id()).start();
-            
-        } catch (Exception e) {
-            System.err.println("[PEER " + self.id() + "] Error building MQTT status payload: " + e.getMessage());
-        }
+        mqttManager.publishStatus(payload);
     }
 
     public SlidingWindowBuffer getBuffer() {
@@ -676,15 +538,11 @@ public class ProductionLineNode {
     }
 
     void addAverageToBufferForTesting(double avg) {
-        synchronized (localAveragesBuffer) {
-            localAveragesBuffer.add(avg);
-        }
+        mqttManager.addAverage(avg);
     }
 
     List<Double> getLocalAveragesBufferSnapshot() {
-        synchronized (localAveragesBuffer) {
-            return new ArrayList<>(localAveragesBuffer);
-        }
+        return mqttManager.getLocalAveragesBufferSnapshot();
     }
 
     public String getServerUrl() {
