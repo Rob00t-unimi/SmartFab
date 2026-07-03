@@ -1,4 +1,4 @@
-package dps.adminServer;
+package dps.adminServer.service;
 
 import org.eclipse.paho.client.mqttv3.*;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;

@@ -1,4 +1,4 @@
-package dps.adminServer;
+package dps.adminServer.service;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
