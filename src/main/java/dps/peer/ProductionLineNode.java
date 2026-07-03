@@ -3,6 +3,7 @@ package dps.peer;
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.config.NodeConfig;
+import dps.peer.net.NetworkManager;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
@@ -40,13 +41,10 @@ import java.util.concurrent.TimeUnit;
 
 public class ProductionLineNode {
 
-    // Map of active peers, manually synchronized on 'this'
-    private final Map<Integer, ProductionLine> peers = new HashMap<>();
-
     private final ProductionLine self;
     private final String serverUrl;
     
-    private Server grpcServer;
+    private final NetworkManager networkManager;
 
     // Sensor and state properties
     private final SlidingWindowBuffer buffer = new SlidingWindowBuffer();
@@ -86,6 +84,11 @@ public class ProductionLineNode {
         this.self = self;
         this.serverUrl = serverUrl;
         this.mqttBrokerUrl = mqttBrokerUrl;
+        this.networkManager = new NetworkManager(this, self, serverUrl);
+    }
+
+    public NetworkManager getNetworkManager() {
+        return networkManager;
     }
 
     public static void main(String[] args) {
@@ -100,24 +103,24 @@ public class ProductionLineNode {
             System.out.println("[PEER " + node.getSelf().id() + "] Admin Server URL: " + node.getServerUrl());
 
             // 1. Start gRPC Server first so that peers can reach us as soon as we register
-            node.startGrpcServer();
+            node.getNetworkManager().startGrpcServer();
 
             // 2. REST Registration
-            node.registerWithAdminServer();
+            node.getNetworkManager().registerWithAdminServer();
 
             // 3. gRPC Presentation to all registered peers in parallel
-            node.presentSelfToPeers();
+            node.getNetworkManager().presentSelfToPeers();
 
             // 4. Connect to MQTT Broker
             node.connectMqtt();
 
-            // 5. Start monitoring sensor and window consumer loop
+            // 5. Start Monitoring Sensor and Processing Thread Loops
             node.startMonitoring();
 
             System.out.println("[PEER " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
             
             // Block until JVM is terminated
-            node.blockUntilGRPCShutdown();
+            node.getNetworkManager().blockUntilGRPCShutdown();
 
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
@@ -126,177 +129,19 @@ public class ProductionLineNode {
         } catch (IllegalStateException e) {
             System.err.println("Startup Failed: " + e.getMessage());
             if (node != null) {
-                node.stopGrpcServer();
+                node.getNetworkManager().stopGrpcServer();
                 node.stopMonitoring();
             }
             System.exit(1);
         } catch (Exception e) {
             System.err.println("Unexpected Error: " + e.getMessage());
             if (node != null) {
-                node.stopGrpcServer();
+                node.getNetworkManager().stopGrpcServer();
                 node.stopMonitoring();
             }
             System.exit(1);
         }
     }
-
-
-
-    /**
-     * Starts the local gRPC Server on the configured port.
-     */
-    public synchronized void startGrpcServer() throws IOException {
-        if (grpcServer != null) {
-            return;
-        }
-
-        grpcServer = ServerBuilder.forPort(self.port())
-                .addService(new PeerServiceImpl(this))
-                .build()
-                .start();
-
-        System.out.println("[PEER " + self.id() + "] gRPC server started, listening on port " + self.port());
-
-        // Add a shutdown hook to stop the gRPC server when JVM shuts down
-        // starts a new thread that performs cleanup during the shutdown phase
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("[PEER " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
-            ProductionLineNode.this.stopGrpcServer();
-            ProductionLineNode.this.stopMonitoring();
-        }));
-    }
-
-    /**
-     * Gracefully stops the local gRPC Server.
-     */
-    public synchronized void stopGrpcServer() {
-        if (grpcServer != null) {
-            grpcServer.shutdown();
-            try {
-                if (!grpcServer.awaitTermination(3, TimeUnit.SECONDS)) {
-                    grpcServer.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                // If an interrupt occurs during the "try" phase, an exception is thrown and the interrupt must be re-raised.
-                grpcServer.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-            grpcServer = null;
-            System.out.println("[PEER " + self.id() + "] gRPC server stopped.");
-        }
-    }
-
-    /**
-     * Blocks the thread until the gRPC server is terminated.
-     */
-    public void blockUntilGRPCShutdown() throws InterruptedException {
-        if (grpcServer != null) {
-            grpcServer.awaitTermination();
-        }
-    }
-
-    /**
-     * Registers this node with the Admin Server via REST POST.
-     * Populates the local peer list with the response on success.
-     */
-    public void registerWithAdminServer() {
-        RestTemplate restTemplate = new RestTemplate();
-        String url = this.serverUrl + "/production-lines";
-
-        try {
-            // Perform HTTP POST request (the only post avaiable in /production-lines is "register").
-            // Spring will automatically serialize 'this.self' into JSON
-            // and deserialize the response JSON array into an array of ProductionLine.
-            ProductionLine[] response = restTemplate.postForObject(url, this.self, ProductionLine[].class); // The third parameter tells Spring which object to deserialize the response into.
-            if (response != null) {
-                for (ProductionLine peer : response) {
-                    addPeer(peer); // synchronized
-                }
-                System.out.println("[PEER " + self.id() + "] REST registration successful. Loaded " + response.length + " peer(s) from Admin Server.");
-            }
-        } catch (HttpClientErrorException.Conflict e) {
-            throw new IllegalStateException("Registration conflict: Node with ID " + self.id() + " is already registered.");
-        } catch (ResourceAccessException e) {
-            throw new IllegalStateException("Connection failed: Admin Server is offline or unreachable at " + url);
-        } catch (Exception e) {
-            throw new IllegalStateException("Registration failed due to unexpected error: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Broadcasts a gRPC presentation request in parallel to all currently known peers.
-     */
-    public void presentSelfToPeers() {
-        List<ProductionLine> currentPeers = getPeers(); // synchronized
-        if (currentPeers.isEmpty()) {
-            System.out.println("[PEER " + self.id() + "] No existing peers to present to in local network view.");
-            return;
-        }
-
-        System.out.println("[PEER " + self.id() + "] Sending gRPC presentation requests to " + currentPeers.size() + " peer(s) in parallel...");
-
-        // P2P broadcasts must be done in parallel by using CachedThreadPool.
-        ExecutorService executor = Executors.newCachedThreadPool();
-
-        for (ProductionLine peer : currentPeers) {
-            executor.submit(() -> {  // For each peer, we assign and execute a lambda to a thread into the pool (
-                // Tasks are assigned to the pool threads sequentially within the loop, but the threads execute the gRPC calls in parallel, without waiting for the previous thread to establish or complete its connection.
-                ManagedChannel channel = null;
-                try {
-                    channel = ManagedChannelBuilder.forAddress(peer.ip(), peer.port())  // gRPC channel creation
-                            .usePlaintext() // http instead of https
-                            .build();
-
-                    // Creating a stub object locally allows server remote procedure calls to be made from it.
-                    PeerServiceGrpc.PeerServiceBlockingStub stub = PeerServiceGrpc.newBlockingStub(channel); // BlockingStub, because the current thread waits for the RPC response.
-
-                    // Constructing Messages using the Builder Pattern auto-generated by Protobuf
-                    NodeIdentity identity = NodeIdentity.newBuilder()   // NodeIdentity (object generated by Protobuf)
-                            .setId(self.id())
-                            .setIp(self.ip())
-                            .setPort(self.port())
-                            .build();
-
-                    // Construction of the request
-                    PresentationRequest request = PresentationRequest.newBuilder()  // PresentationRequest (object generated by Protobuf)
-                            .setSender(identity)
-                            .build();
-
-                    // Executing the gRPC call with a 3-second timeout to a gRPC server of another peer
-                    PresentationResponse response = stub.withDeadlineAfter(3, TimeUnit.SECONDS).present(request);
-                    if (response.getAccepted()) {
-                        System.out.println("[PEER " + self.id() + "] [" + getState() + "] gRPC presentation ACCEPTED by Node " + peer.id());
-                    } else {
-                        System.out.println("[PEER " + self.id() + "] [" + getState() + "] ⚠️ gRPC presentation REJECTED by Node " + peer.id());
-                    }
-
-                } catch (Exception e) {
-                    System.err.println("[PEER " + self.id() + "] [" + getState() + "] ❌ gRPC presentation FAILED to Node " + peer.id() + " - Error: " + e.getMessage());
-                } finally {
-                    if (channel != null) {
-                        try {
-                            // close the gRPC channel
-                            channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                    }
-                }
-            });
-        }
-
-        // Shutdown Thread Pool
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt(); // If an interrupt arrives that sends execution to the "catch" block, I re-throw it.
-        }
-    }
-
     /**
      * Starts the physical sensor simulator and the background thread that consumes
      * measurements from the sliding window buffer. Starts mqtt publishing.
@@ -515,7 +360,7 @@ public class ProductionLineNode {
      * Sends a gRPC request for calibration to all active peers in parallel.
      */
     public synchronized ProductionLine getPeerById(int id) {
-        return peers.get(id);
+        return networkManager.getPeerById(id);
     }
 
     /**
@@ -846,23 +691,41 @@ public class ProductionLineNode {
         return serverUrl;
     }
 
-    // Thread-safe peer management using basic synchronized blocks
+    // Thread-safe network delegation to NetworkManager
+    public synchronized void startGrpcServer() throws java.io.IOException {
+        networkManager.startGrpcServer();
+    }
+
+    public synchronized void stopGrpcServer() {
+        networkManager.stopGrpcServer();
+    }
+
+    public void blockUntilGRPCShutdown() throws InterruptedException {
+        networkManager.blockUntilGRPCShutdown();
+    }
+
+    public void registerWithAdminServer() {
+        networkManager.registerWithAdminServer();
+    }
+
+    public void presentSelfToPeers() {
+        networkManager.presentSelfToPeers();
+    }
+
+    // Thread-safe peer management delegated to NetworkManager
     public synchronized void addPeer(ProductionLine peer) {
-        if (peer == null) {
-            throw new IllegalArgumentException("Peer cannot be null.");
-        }
-        peers.put(peer.id(), peer);
+        networkManager.addPeer(peer);
     }
 
     public synchronized void removePeer(int peerId) {
-        peers.remove(peerId);
+        networkManager.removePeer(peerId);
     }
 
     public synchronized List<ProductionLine> getPeers() {
-        return new ArrayList<>(peers.values());
+        return networkManager.getPeers();
     }
 
     public synchronized int getPeerCount() {
-        return peers.size();
+        return networkManager.getPeerCount();
     }
 }
