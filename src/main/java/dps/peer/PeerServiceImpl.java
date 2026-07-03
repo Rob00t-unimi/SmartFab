@@ -2,6 +2,7 @@ package dps.peer;
 
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
+import dps.peer.coordinator.RicartAgrawalaCoordinator;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.PeerServiceGrpc;
@@ -9,15 +10,21 @@ import dps.peer.proto.PresentationRequest;
 import dps.peer.proto.PresentationResponse;
 import io.grpc.stub.StreamObserver;
 
+/**
+ * gRPC Service implementation for incoming peer requests.
+ * Delegates topology additions to NetworkManager and mutual exclusion coordination to RicartAgrawalaCoordinator.
+ */
 public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
 
     private final ProductionLineNode node;
+    private final RicartAgrawalaCoordinator coordinator;
 
     public PeerServiceImpl(ProductionLineNode node) {
         if (node == null) {
             throw new IllegalArgumentException("ProductionLineNode reference cannot be null.");
         }
         this.node = node;
+        this.coordinator = node.getCoordinator();
     }
 
     /**
@@ -36,7 +43,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
             );
 
             // Add the new peer to our local thread-safe topology registry
-            node.addPeer(newPeer);
+            node.getNetworkManager().addPeer(newPeer);
 
             System.out.println("[PEER " + node.getSelf().id() + "] [" + node.getState() + "] Received gRPC presentation request from Node " 
                     + newPeer.id() + " (" + newPeer.ip() + ":" + newPeer.port() + "). Adding to local topology.");
@@ -60,7 +67,6 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
         }
     }
 
-
     /**
      * Handles incoming calibration requests from other peers (Ricart-Agrawala Server-side logic).
      * 
@@ -83,13 +89,13 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
             long senderTimestamp = request.getTimestamp();
 
             // Update our local Lamport clock upon receiving the message
-            node.updateClockOnReceive(senderTimestamp);
+            coordinator.updateClockOnReceive(senderTimestamp);
 
             boolean defer = false;
             String decisionReason = "";
             boolean yieldToSender = false;
 
-            synchronized (node) {
+            synchronized (coordinator) {
                 OperationalState localState = node.getState();  // get current local state
                 int localId = node.getSelf().id();              // get local id
 
@@ -125,7 +131,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                 }
 
                 if (!defer && yieldToSender) {
-                    if (node.hasReplyFrom(senderId)) {
+                    if (coordinator.hasReplyFrom(senderId)) {
                         /*
                          * Yielding logic for Adapted Ricart-Agrawala (Section 4.3.2):
                          * Since priority is based on dynamic criticality rather than Lamport clocks, a later request
@@ -134,13 +140,13 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                          * we must invalidate/remove that reply. We then re-request calibration from them
                          * so that they queue/defer us on their end.
                          */
-                        node.removeReply(senderId);
+                        coordinator.removeReply(senderId);
 
                         // Re-request calibration from this higher-priority peer so that they queue/defer us.
                         // This prevents deadlocks when the higher-priority peer is not currently aware that we are waiting.
-                        ProductionLine senderPeer = node.getPeerById(senderId);
+                        ProductionLine senderPeer = node.getNetworkManager().getPeerById(senderId);
                         if (senderPeer != null) {
-                            node.sendCalibrationRequestToPeerAsynchronously(senderPeer);
+                            coordinator.sendCalibrationRequestToPeerAsynchronously(senderPeer);
                         }
                     }
                 }
@@ -148,7 +154,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
 
             if (defer) {
                 // Store the observer in the deferred list
-                node.addDeferredObserver(senderId, responseObserver, decisionReason);
+                coordinator.addDeferredObserver(senderId, responseObserver, decisionReason);
             } else {
                 // Reply immediately
                 System.out.println("[PEER " + node.getSelf().id() + "] [" + node.getState() + "] Replying IMMEDIATELY to calibration request from Node " 
