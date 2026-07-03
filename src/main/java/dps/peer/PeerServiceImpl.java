@@ -125,22 +125,23 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                 }
 
                 if (!defer && yieldToSender) {
-                    /*
-                     * Yielding logic for Adapted Ricart-Agrawala (Section 4.3.2):
-                     * Since priority is based on dynamic criticality rather than Lamport clocks, a later request
-                     * with higher criticality can preempt an earlier request.
-                     * If we yield to a higher-priority sender, we must invalidate/remove any reply we previously
-                     * received from them. This prevents both nodes from holding each other's replies simultaneously,
-                     * guaranteeing strict mutual exclusion. The local node will wait for this sender to finish
-                     * and send a fresh reply later.
-                     */
-                    node.removeReply(senderId);
+                    if (node.hasReplyFrom(senderId)) {
+                        /*
+                         * Yielding logic for Adapted Ricart-Agrawala (Section 4.3.2):
+                         * Since priority is based on dynamic criticality rather than Lamport clocks, a later request
+                         * with higher criticality can preempt an earlier request.
+                         * If we yield to a higher-priority sender, and we already received a reply from them,
+                         * we must invalidate/remove that reply. We then re-request calibration from them
+                         * so that they queue/defer us on their end.
+                         */
+                        node.removeReply(senderId);
 
-                    // Re-request calibration from this higher-priority peer so that they queue/defer us.
-                    // This prevents deadlocks when the higher-priority peer is not currently aware that we are waiting.
-                    ProductionLine senderPeer = node.getPeerById(senderId);
-                    if (senderPeer != null) {
-                        node.sendCalibrationRequestToPeerAsynchronously(senderPeer);
+                        // Re-request calibration from this higher-priority peer so that they queue/defer us.
+                        // This prevents deadlocks when the higher-priority peer is not currently aware that we are waiting.
+                        ProductionLine senderPeer = node.getPeerById(senderId);
+                        if (senderPeer != null) {
+                            node.sendCalibrationRequestToPeerAsynchronously(senderPeer);
+                        }
                     }
                 }
             }
