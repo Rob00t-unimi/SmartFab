@@ -202,6 +202,12 @@ public class ProductionLineNodeIntegrationTest {
         // Assertion 3: Node 2 has completed calibration and returned to FULLY_OPERATIONAL
         assertEquals(OperationalState.FULLY_OPERATIONAL, node2.getState());
 
+        // Wait a brief moment (max 1 second) for Node 1 to receive the gRPC reply and enter UNDER_CALIBRATION
+        long waitStart = System.currentTimeMillis();
+        while (node1.getState() == OperationalState.WAITING_FOR_CALIBRATION && (System.currentTimeMillis() - waitStart) < 1000) {
+            Thread.sleep(50);
+        }
+
         // Assertion 4: Node 1 has received the deferred reply, unblocked, and entered UNDER_CALIBRATION
         assertEquals(OperationalState.UNDER_CALIBRATION, node1.getState());
 

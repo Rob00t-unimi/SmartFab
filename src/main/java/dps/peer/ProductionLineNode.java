@@ -131,7 +131,13 @@ public class ProductionLineNode {
         ProductionLineNode node = null;
         try {
             NodeConfig config = NodeConfig.parseArgs(args);
-            node = new ProductionLineNode(config.self(), config.serverUrl());
+            // Redirect console output to LogUtils for clean colorized and shared logs
+            dps.common.util.LogUtils.redirectSystemOutAndErr("PEER-" + config.self().id(), dps.common.util.LogUtils.getPeerColor(String.valueOf(config.self().id())));
+            
+            node = new ProductionLineNode(config.self(), config.serverUrl(), config.mqttBrokerUrl());
+
+            System.out.println("[PEER " + node.getSelf().id() + "] Starting node on " + node.getSelf().ip() + ":" + node.getSelf().port());
+            System.out.println("[PEER " + node.getSelf().id() + "] Admin Server URL: " + node.getServerUrl());
 
             // Add JVM shutdown hook to clean up resources gracefully
             final ProductionLineNode finalNode = node;
@@ -156,11 +162,21 @@ public class ProductionLineNode {
             // Start physical sensor simulation loop and consumer thread
             node.startMonitoring();
 
+            System.out.println("[PEER " + node.getSelf().id() + "] Node is running. Press Ctrl+C to exit.");
+
             // Keep the main thread alive waiting for server shutdown
             node.getNetworkManager().blockUntilGRPCShutdown();
 
         } catch (IllegalArgumentException e) {
-            System.err.println("Configuration Error: " + e.getMessage());
+            System.err.println("Error: " + e.getMessage());
+            System.err.println("Usage: java dps.peer.ProductionLineNode <id> <ip> <port> [serverUrl] [mqttBrokerUrl]");
+            System.exit(1);
+        } catch (IllegalStateException e) {
+            System.err.println("Startup Failed: " + e.getMessage());
+            if (node != null) {
+                node.getNetworkManager().stopGrpcServer();
+                node.stopMonitoring();
+            }
             System.exit(1);
         } catch (Exception e) {
             System.err.println("Unexpected Error: " + e.getMessage());
