@@ -6,6 +6,7 @@ import dps.peer.config.NodeConfig;
 import dps.peer.net.NetworkManager;
 import dps.peer.mqtt.MqttManager;
 import dps.peer.coordinator.RicartAgrawalaCoordinator;
+import dps.peer.sensor.SensorManager;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.NodeIdentity;
 import dps.peer.proto.PeerServiceGrpc;
@@ -49,13 +50,10 @@ public class ProductionLineNode {
     private final NetworkManager networkManager;
 
     // Sensor and state properties
-    private final SlidingWindowBuffer buffer = new SlidingWindowBuffer();
-    private final MonitoringSensor sensor = new MonitoringSensor(buffer);
     private OperationalState state = OperationalState.FULLY_OPERATIONAL;
     private final double vibrationThreshold = 80.0;
-
-    private Thread monitoringThread;    // consumer thread
-    private volatile boolean running = true;    // `volatile` saves to RAM, so all threads see exactly that value.
+    
+    private final SensorManager sensorManager;
 
     private final RicartAgrawalaCoordinator coordinator;
 
@@ -76,6 +74,7 @@ public class ProductionLineNode {
         this.networkManager = new NetworkManager(this, self, serverUrl);
         this.mqttManager = new MqttManager(this, self, mqttBrokerUrl);
         this.coordinator = new RicartAgrawalaCoordinator(this, self);
+        this.sensorManager = new SensorManager(this, self, vibrationThreshold);
     }
 
     public RicartAgrawalaCoordinator getCoordinator() {
@@ -86,8 +85,12 @@ public class ProductionLineNode {
         return mqttManager;
     }
 
+    public SensorManager getSensorManager() {
+        return sensorManager;
+    }
+
     public boolean isRunning() {
-        return running;
+        return sensorManager.isRunning();
     }
 
     public NetworkManager getNetworkManager() {
@@ -149,80 +152,14 @@ public class ProductionLineNode {
      * Starts the physical sensor simulator and the background thread that consumes
      * measurements from the sliding window buffer. Starts mqtt publishing.
      */
+    // Thread-safe SensorManager delegation
     public synchronized void startMonitoring() {
-        if (monitoringThread != null) {
-            return;
-        }
-
-        running = true;
-        sensor.startMeasuring();    // start sensor simulation
-        System.out.println("[PEER " + self.id() + "] Physical sensor simulator started.");
-
-        monitoringThread = new Thread(() -> {   // create a thread with this lambda
-            while (running) {
-                try {
-                    // Block until 8 measurements are ready (50% overlap step on subsequent reads)
-                    List<Measurement> window = buffer.readAllAndClear();
-                    if (window.isEmpty()) {
-                        continue;
-                    }
-
-                    // Compute window average
-                    double sum = 0;
-                    for (Measurement m : window) {
-                        sum += m.value();
-                    }
-                    double average = sum / window.size();
-                    
-                    // Track average value for criticality calculation
-                    setLastCalculatedAverage(average);
-
-                    // Buffer the average for MQTT telemetry
-                    mqttManager.addAverage(average);
-
-                    System.out.println("[PEER " + self.id() + "] [" + getState() + "] Calculated sliding window average: " 
-                            + String.format("%.2f", average) + " (Threshold: " + vibrationThreshold + ")");
-
-                    // Check if threshold exceeded to trigger calibration transition
-                    if (average > vibrationThreshold && getState() == OperationalState.FULLY_OPERATIONAL) {
-                        transitionToWaitingForCalibration(average);
-                    }
-
-                } catch (Exception e) {
-                    if (!running) {
-                        break;
-                    }
-                    System.err.println("[PEER " + self.id() + "] Error in sensor monitoring loop: " + e.getMessage());
-                }
-            }
-        });
-        monitoringThread.setName("Sensor-Monitoring-Loop-Node-" + self.id());
-        monitoringThread.start();   // start the thread
-
-        // Start periodic MQTT telemetry thread
-        mqttManager.startMqttTelemetryPublishing();
+        sensorManager.startMonitoring();
     }
 
-    /**
-     * Stops the sensor simulator and shuts down the background monitoring thread and mqtt publisher.
-     */
     public synchronized void stopMonitoring() {
-        running = false;
-        sensor.stopMeasuring();
-        buffer.clear(); // Wake up wait() blocks inside SlidingWindowBuffer
-        if (monitoringThread != null) {
-            monitoringThread.interrupt();
-            try {
-                monitoringThread.join(2000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            monitoringThread = null;
-        }
-
-        // Stop MQTT publisher and disconnect Paho client
+        sensorManager.stopMonitoring();
         mqttManager.stop();
-        System.out.println("[PEER " + self.id() + "] Sensor monitoring loop stopped.");
     }
 
     // Thread-safe MQTT delegation to MqttManager
@@ -242,14 +179,14 @@ public class ProductionLineNode {
      * Local state transition to WAITING_FOR_CALIBRATION.
      * Pauses the physical sensor simulator and clears the window buffer.
      */
-    private synchronized void transitionToWaitingForCalibration(double average) {
+    public synchronized void transitionToWaitingForCalibration(double average) {
         setState(OperationalState.WAITING_FOR_CALIBRATION);
 
         System.out.println("[PEER " + self.id() + "] [WAITING_FOR_CALIBRATION] ⚠️ Average vibration " 
                 + String.format("%.2f", average) + " exceeded threshold " + vibrationThreshold + "! Pausing sensor, clearing buffer, and requesting calibration...");
 
-        sensor.pauseMeasuring();
-        buffer.clear();
+        sensorManager.pauseMeasuring();
+        sensorManager.clearBuffer();
 
         // Asynchronously start the calibration sequence in a separate thread
         new Thread(() -> {
@@ -308,11 +245,11 @@ public class ProductionLineNode {
     }
 
     public SlidingWindowBuffer getBuffer() {
-        return buffer;
+        return sensorManager.getBuffer();
     }
 
     public MonitoringSensor getSensor() {
-        return sensor;
+        return sensorManager.getSensor();
     }
 
     // Thread-safe Lamport clock and RA helper methods delegated to coordinator
