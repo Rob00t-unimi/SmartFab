@@ -77,7 +77,7 @@ public class SensorManager {
                     double average = sum / window.size();
                     
                     // Track average value for criticality calculation
-                    node.setLastCalculatedAverage(average);
+                    node.getCoordinator().setLastCalculatedAverage(average);
 
                     // Buffer the average for MQTT telemetry
                     node.getMqttManager().addAverage(average);

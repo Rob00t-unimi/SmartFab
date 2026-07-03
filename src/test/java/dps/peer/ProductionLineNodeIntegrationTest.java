@@ -31,7 +31,7 @@ public class ProductionLineNodeIntegrationTest {
     public void tearDown() {
         for (ProductionLineNode node : startedNodes) {
             try {
-                node.stopGrpcServer();
+                node.getNetworkManager().stopGrpcServer();
             } catch (Exception e) {
                 // Ignore failure during shutdown of single test server
             }
@@ -41,7 +41,7 @@ public class ProductionLineNodeIntegrationTest {
 
     private ProductionLineNode createAndStartNode(ProductionLine self, String serverUrl) throws Exception {
         ProductionLineNode node = new ProductionLineNode(self, serverUrl);
-        node.startGrpcServer();
+        node.getNetworkManager().startGrpcServer();
         startedNodes.add(node);
         return node;
     }
@@ -54,29 +54,29 @@ public class ProductionLineNodeIntegrationTest {
         ProductionLine self1 = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node1 = createAndStartNode(self1, serverUrl);
 
-        assertEquals(0, node1.getPeerCount());
-        node1.registerWithAdminServer();
+        assertEquals(0, node1.getNetworkManager().getPeerCount());
+        node1.getNetworkManager().registerWithAdminServer();
 
         // Node 1 is registered, list of returned peers should be empty
-        assertEquals(0, node1.getPeerCount());
+        assertEquals(0, node1.getNetworkManager().getPeerCount());
 
         // Register Node 2
         ProductionLine self2 = new ProductionLine(2, "127.0.0.1", 5002);
         ProductionLineNode node2 = createAndStartNode(self2, serverUrl);
 
-        assertEquals(0, node2.getPeerCount());
-        node2.registerWithAdminServer();
+        assertEquals(0, node2.getNetworkManager().getPeerCount());
+        node2.getNetworkManager().registerWithAdminServer();
 
         // Node 2 is registered, should have loaded Node 1 as a peer
-        assertEquals(1, node2.getPeerCount());
-        assertEquals(1, node2.getPeers().get(0).id());
+        assertEquals(1, node2.getNetworkManager().getPeerCount());
+        assertEquals(1, node2.getNetworkManager().getPeers().get(0).id());
 
         // Attempting to register Node 1 again should fail with Conflict
         ProductionLine self1Duplicate = new ProductionLine(1, "127.0.0.1", 9999);
         ProductionLineNode node1Duplicate = new ProductionLineNode(self1Duplicate, serverUrl);
 
         IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-            node1Duplicate.registerWithAdminServer();
+            node1Duplicate.getNetworkManager().registerWithAdminServer();
         });
         assertTrue(exception.getMessage().contains("Registration conflict"));
     }
@@ -88,53 +88,53 @@ public class ProductionLineNodeIntegrationTest {
         // 1. Start and register Node 1
         ProductionLine self1 = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node1 = createAndStartNode(self1, serverUrl);
-        node1.registerWithAdminServer();
-        node1.presentSelfToPeers();
+        node1.getNetworkManager().registerWithAdminServer();
+        node1.getNetworkManager().presentSelfToPeers();
 
-        assertEquals(0, node1.getPeerCount()); // No other peers yet
+        assertEquals(0, node1.getNetworkManager().getPeerCount()); // No other peers yet
 
         // 2. Start and register Node 2
         ProductionLine self2 = new ProductionLine(2, "127.0.0.1", 5002);
         ProductionLineNode node2 = createAndStartNode(self2, serverUrl);
-        node2.registerWithAdminServer(); // Node 2 receives Node 1 from registry
-        node2.presentSelfToPeers();      // Node 2 presents itself to Node 1 via gRPC
+        node2.getNetworkManager().registerWithAdminServer(); // Node 2 receives Node 1 from registry
+        node2.getNetworkManager().presentSelfToPeers();      // Node 2 presents itself to Node 1 via gRPC
 
         // Give a brief moment for async executor thread to complete P2P presentation call
         Thread.sleep(200);
 
         // Verification:
         // Node 2 knows Node 1 (loaded from REST registry)
-        assertEquals(1, node2.getPeerCount());
-        assertTrue(node2.getPeers().stream().anyMatch(p -> p.id() == 1));
+        assertEquals(1, node2.getNetworkManager().getPeerCount());
+        assertTrue(node2.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 1));
 
         // Node 1 knows Node 2 (received via gRPC present call)
-        assertEquals(1, node1.getPeerCount());
-        assertTrue(node1.getPeers().stream().anyMatch(p -> p.id() == 2));
+        assertEquals(1, node1.getNetworkManager().getPeerCount());
+        assertTrue(node1.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 2));
 
         // 3. Start and register Node 3
         ProductionLine self3 = new ProductionLine(3, "127.0.0.1", 5003);
         ProductionLineNode node3 = createAndStartNode(self3, serverUrl);
-        node3.registerWithAdminServer(); // Node 3 receives Node 1 and 2 from registry
-        node3.presentSelfToPeers();      // Node 3 presents to Node 1 and 2 via gRPC
+        node3.getNetworkManager().registerWithAdminServer(); // Node 3 receives Node 1 and 2 from registry
+        node3.getNetworkManager().presentSelfToPeers();      // Node 3 presents to Node 1 and 2 via gRPC
 
         // Give a brief moment for async executor threads to complete P2P presentation calls
         Thread.sleep(200);
 
         // Final verification:
         // Node 1 should know 2 and 3
-        assertEquals(2, node1.getPeerCount());
-        assertTrue(node1.getPeers().stream().anyMatch(p -> p.id() == 2));
-        assertTrue(node1.getPeers().stream().anyMatch(p -> p.id() == 3));
+        assertEquals(2, node1.getNetworkManager().getPeerCount());
+        assertTrue(node1.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 2));
+        assertTrue(node1.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 3));
 
         // Node 2 should know 1 and 3
-        assertEquals(2, node2.getPeerCount());
-        assertTrue(node2.getPeers().stream().anyMatch(p -> p.id() == 1));
-        assertTrue(node2.getPeers().stream().anyMatch(p -> p.id() == 3));
+        assertEquals(2, node2.getNetworkManager().getPeerCount());
+        assertTrue(node2.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 1));
+        assertTrue(node2.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 3));
 
         // Node 3 should know 1 and 2
-        assertEquals(2, node3.getPeerCount());
-        assertTrue(node3.getPeers().stream().anyMatch(p -> p.id() == 1));
-        assertTrue(node3.getPeers().stream().anyMatch(p -> p.id() == 2));
+        assertEquals(2, node3.getNetworkManager().getPeerCount());
+        assertTrue(node3.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 1));
+        assertTrue(node3.getNetworkManager().getPeers().stream().anyMatch(p -> p.id() == 2));
     }
 
     @Test
@@ -145,7 +145,7 @@ public class ProductionLineNodeIntegrationTest {
         ProductionLineNode node = new ProductionLineNode(self, serverUrl);
 
         IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-            node.registerWithAdminServer();
+            node.getNetworkManager().registerWithAdminServer();
         });
         assertTrue(exception.getMessage().contains("Connection failed"));
     }
@@ -158,27 +158,27 @@ public class ProductionLineNodeIntegrationTest {
         ProductionLine self1 = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node1 = createAndStartNode(self1, serverUrl);
         node1.setState(OperationalState.WAITING_FOR_CALIBRATION);
-        node1.setLastCalculatedAverage(90.0);
+        node1.getCoordinator().setLastCalculatedAverage(90.0);
 
         // 2. Initialize Node 2 (ID 2, average = 100.0 -> criticality = 0.25)
         // Node 2 has HIGHER criticality, so it must calibrate FIRST
         ProductionLine self2 = new ProductionLine(2, "127.0.0.1", 5002);
         ProductionLineNode node2 = createAndStartNode(self2, serverUrl);
         node2.setState(OperationalState.WAITING_FOR_CALIBRATION);
-        node2.setLastCalculatedAverage(100.0);
+        node2.getCoordinator().setLastCalculatedAverage(100.0);
 
         // 3. Establish P2P topology view manually (without REST to avoid registration overhead)
-        node1.addPeer(self2);
-        node2.addPeer(self1);
+        node1.getNetworkManager().addPeer(self2);
+        node2.getNetworkManager().addPeer(self1);
 
         // 4. Trigger calibration concurrently on both nodes in separate threads
         Thread t1 = new Thread(() -> {
-            node1.enterCalibrationAndWait();
-            node1.releaseCalibration();
+            node1.getCoordinator().enterCalibrationAndWait();
+            node1.getCoordinator().releaseCalibration();
         });
         Thread t2 = new Thread(() -> {
-            node2.enterCalibrationAndWait();
-            node2.releaseCalibration();
+            node2.getCoordinator().enterCalibrationAndWait();
+            node2.getCoordinator().releaseCalibration();
         });
 
         t1.start();

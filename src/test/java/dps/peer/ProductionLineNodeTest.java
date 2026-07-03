@@ -99,25 +99,25 @@ public class ProductionLineNodeTest {
         ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
-        assertEquals(0, node.getPeerCount());
-        assertTrue(node.getPeers().isEmpty());
+        assertEquals(0, node.getNetworkManager().getPeerCount());
+        assertTrue(node.getNetworkManager().getPeers().isEmpty());
 
         ProductionLine peer1 = new ProductionLine(2, "127.0.0.1", 5002);
         ProductionLine peer2 = new ProductionLine(3, "127.0.0.1", 5003);
 
-        node.addPeer(peer1);
-        node.addPeer(peer2);
+        node.getNetworkManager().addPeer(peer1);
+        node.getNetworkManager().addPeer(peer2);
 
-        assertEquals(2, node.getPeerCount());
-        List<ProductionLine> activePeers = node.getPeers();
+        assertEquals(2, node.getNetworkManager().getPeerCount());
+        List<ProductionLine> activePeers = node.getNetworkManager().getPeers();
         assertEquals(2, activePeers.size());
         assertTrue(activePeers.contains(peer1));
         assertTrue(activePeers.contains(peer2));
 
-        node.removePeer(2);
-        assertEquals(1, node.getPeerCount());
-        assertFalse(node.getPeers().contains(peer1));
-        assertTrue(node.getPeers().contains(peer2));
+        node.getNetworkManager().removePeer(2);
+        assertEquals(1, node.getNetworkManager().getPeerCount());
+        assertFalse(node.getNetworkManager().getPeers().contains(peer1));
+        assertTrue(node.getNetworkManager().getPeers().contains(peer2));
     }
 
     @Test
@@ -134,13 +134,13 @@ public class ProductionLineNodeTest {
             threads[i] = new Thread(() -> {
                 try {
                     ProductionLine p = new ProductionLine(id, "127.0.0.1", 5000 + id);
-                    node.addPeer(p);
+                    node.getNetworkManager().addPeer(p);
                     // Perform concurrent reads
-                    node.getPeers();
-                    node.getPeerCount();
+                    node.getNetworkManager().getPeers();
+                    node.getNetworkManager().getPeerCount();
                     // Intermittently remove some peers to test concurrent removals
                     if (id % 2 == 0) {
-                        node.removePeer(id);
+                        node.getNetworkManager().removePeer(id);
                     }
                 } catch (Exception e) {
                     failed.set(true);
@@ -154,7 +154,7 @@ public class ProductionLineNodeTest {
         assertFalse(failed.get(), "Concurrent peer modifications caused exceptions or data corruption");
         // Count should be exactly half of the threads that didn't get removed (id % 2 != 0)
         // Which is threadCount / 2 = 50 peers remaining.
-        assertEquals(50, node.getPeerCount());
+        assertEquals(50, node.getNetworkManager().getPeerCount());
     }
 
     @Test
@@ -162,8 +162,8 @@ public class ProductionLineNodeTest {
         ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
-        assertNotNull(node.getBuffer());
-        assertNotNull(node.getSensor());
+        assertNotNull(node.getSensorManager().getBuffer());
+        assertNotNull(node.getSensorManager().getSensor());
         assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
     }
 
@@ -176,13 +176,13 @@ public class ProductionLineNodeTest {
 
         // Start monitoring loop
         node.startMonitoring();
-        node.getSensor().pauseMeasuring();
-        node.getBuffer().clear();
+        node.getSensorManager().getSensor().pauseMeasuring();
+        node.getSensorManager().getBuffer().clear();
 
         // Feed 8 measurements with values > 80.0
         long now = System.currentTimeMillis();
         for (int i = 0; i < 8; i++) {
-            node.getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 50.0, now + i));
+            node.getSensorManager().getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 50.0, now + i));
         }
 
         // Wait for consumer thread to consume and calculate
@@ -205,13 +205,13 @@ public class ProductionLineNodeTest {
         node.startMonitoring();
 
         // Pause the physical sensor so it doesn't write noise measurements concurrently
-        node.getSensor().pauseMeasuring();
-        node.getBuffer().clear();
+        node.getSensorManager().getSensor().pauseMeasuring();
+        node.getSensorManager().getBuffer().clear();
 
         // Feed 8 measurements with values > 80.0 to trigger the threshold
         long now = System.currentTimeMillis();
         for (int i = 0; i < 8; i++) {
-            node.getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 90.0, now + i));
+            node.getSensorManager().getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 90.0, now + i));
         }
 
         // Give the background monitoring thread a moment to consume and process the window
@@ -229,18 +229,18 @@ public class ProductionLineNodeTest {
         ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
-        assertEquals(0, node.getLogicalClock());
+        assertEquals(0, node.getCoordinator().getLogicalClock());
 
-        node.incrementClock();
-        assertEquals(1, node.getLogicalClock());
+        node.getCoordinator().incrementClock();
+        assertEquals(1, node.getCoordinator().getLogicalClock());
 
         // Update clock on receive: max(1, 10) + 1 = 11
-        node.updateClockOnReceive(10);
-        assertEquals(11, node.getLogicalClock());
+        node.getCoordinator().updateClockOnReceive(10);
+        assertEquals(11, node.getCoordinator().getLogicalClock());
 
         // Update clock on receive: max(11, 5) + 1 = 12
-        node.updateClockOnReceive(5);
-        assertEquals(12, node.getLogicalClock());
+        node.getCoordinator().updateClockOnReceive(5);
+        assertEquals(12, node.getCoordinator().getLogicalClock());
     }
 
     @Test
@@ -278,12 +278,12 @@ public class ProductionLineNodeTest {
         };
         service.requestCalibration(request1, observer2);
         assertFalse(replied2.get(), "Should defer reply when UNDER_CALIBRATION");
-        assertEquals(1, node.getAndClearDeferredObservers().size());
+        assertEquals(1, node.getCoordinator().getAndClearDeferredObservers().size());
 
         // Case 3: Node is WAITING_FOR_CALIBRATION.
         // Local node (ID 2): average = 90 (criticality = (90-80)/80 = 0.125)
         node.setState(OperationalState.WAITING_FOR_CALIBRATION);
-        node.setLastCalculatedAverage(90.0);
+        node.getCoordinator().setLastCalculatedAverage(90.0);
 
         // Subcase 3a: Sender (ID 3) has higher criticality (0.5 > 0.125). Node 2 should reply immediately.
         final AtomicBoolean replied3a = new AtomicBoolean(false);
@@ -368,24 +368,24 @@ public class ProductionLineNodeTest {
 
             // Add the peer pointing to our mock server
             ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
-            node.addPeer(peer);
+            node.getNetworkManager().addPeer(peer);
 
-            assertEquals(0, node.getLogicalClock());
-            assertEquals(0, node.getRepliesReceived());
+            assertEquals(0, node.getCoordinator().getLogicalClock());
+            assertEquals(0, node.getCoordinator().getRepliesReceived());
 
-            node.setLastCalculatedAverage(90.0);
+            node.getCoordinator().setLastCalculatedAverage(90.0);
 
             // Perform request broadcast
-            node.requestCalibration();
+            node.getCoordinator().requestCalibration();
 
             // Wait a brief moment for the async task to complete
             Thread.sleep(300);
 
             // Assert logical clock incremented
-            assertEquals(1, node.getLogicalClock());
+            assertEquals(1, node.getCoordinator().getLogicalClock());
 
             // Assert reply received successfully
-            assertEquals(1, node.getRepliesReceived());
+            assertEquals(1, node.getCoordinator().getRepliesReceived());
         } finally {
             mockServer.shutdown();
             mockServer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
@@ -411,13 +411,13 @@ public class ProductionLineNodeTest {
 
             // Add the peer pointing to our mock server
             ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
-            node.addPeer(peer);
+            node.getNetworkManager().addPeer(peer);
 
             node.setState(OperationalState.WAITING_FOR_CALIBRATION);
-            node.setLastCalculatedAverage(90.0);
+            node.getCoordinator().setLastCalculatedAverage(90.0);
 
             // Run enterCalibrationAndWait in a separate thread so it can block
-            Thread coordThread = new Thread(node::enterCalibrationAndWait);
+            Thread coordThread = new Thread(node.getCoordinator()::enterCalibrationAndWait);
             coordThread.start();
 
             // Give it a moment to run and block
@@ -428,7 +428,7 @@ public class ProductionLineNodeTest {
             assertEquals(OperationalState.WAITING_FOR_CALIBRATION, node.getState());
 
             // Simulate receiving the reply
-            node.incrementRepliesReceived();
+            node.getCoordinator().incrementRepliesReceived();
 
             // Give it a moment to process the wake up
             Thread.sleep(200);
@@ -451,7 +451,7 @@ public class ProductionLineNodeTest {
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
         node.setState(OperationalState.UNDER_CALIBRATION);
-        node.getSensor().pauseMeasuring();
+        node.getSensorManager().getSensor().pauseMeasuring();
 
         final AtomicBoolean replied = new AtomicBoolean(false);
         StreamObserver<CalibrationReply> mockObserver = new StreamObserver<>() {
@@ -461,10 +461,10 @@ public class ProductionLineNodeTest {
         };
 
         // Add to deferred observers
-        node.addDeferredObserver(2, mockObserver);
+        node.getCoordinator().addDeferredObserver(2, mockObserver);
 
         // Release calibration
-        node.releaseCalibration();
+        node.getCoordinator().releaseCalibration();
 
         // State should transition back to FULLY_OPERATIONAL
         assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
@@ -473,7 +473,7 @@ public class ProductionLineNodeTest {
         assertTrue(replied.get());
 
         // The deferred queue should be cleared
-        assertEquals(0, node.getAndClearDeferredObservers().size());
+        assertEquals(0, node.getCoordinator().getAndClearDeferredObservers().size());
     }
 
     @Test
@@ -481,12 +481,12 @@ public class ProductionLineNodeTest {
         ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
 
-        assertTrue(node.getLocalAveragesBufferSnapshot().isEmpty());
+        assertTrue(node.getMqttManager().getLocalAveragesBufferSnapshot().isEmpty());
 
-        node.addAverageToBufferForTesting(45.2);
-        node.addAverageToBufferForTesting(50.8);
+        node.getMqttManager().addAverage(45.2);
+        node.getMqttManager().addAverage(50.8);
 
-        List<Double> snapshot = node.getLocalAveragesBufferSnapshot();
+        List<Double> snapshot = node.getMqttManager().getLocalAveragesBufferSnapshot();
         assertEquals(2, snapshot.size());
         assertEquals(45.2, snapshot.get(0), 0.001);
         assertEquals(50.8, snapshot.get(1), 0.001);

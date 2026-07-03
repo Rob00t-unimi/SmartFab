@@ -112,7 +112,7 @@ public class RicartAgrawalaCoordinator {
      * Broadcasts a calibration request to all peers.
      */
     public void requestCalibration() {
-        List<ProductionLine> currentPeers = node.getPeers(); // delegated to NetworkManager
+        List<ProductionLine> currentPeers = node.getNetworkManager().getPeers(); // delegated to NetworkManager
 
         synchronized (this) {
             incrementClock(); // send event -> increment Lamport's clock
@@ -217,7 +217,7 @@ public class RicartAgrawalaCoordinator {
         requestCalibration();
 
         // 2. Wait until we receive all replies
-        int requiredReplies = node.getPeerCount();
+        int requiredReplies = node.getNetworkManager().getPeerCount();
         synchronized (this) {
             while (getRepliesReceived() < requiredReplies) {
                 try {
@@ -272,7 +272,7 @@ public class RicartAgrawalaCoordinator {
         }
 
         // Restart physical sensor measuring loop
-        node.getSensor().startMeasuring();
+        node.getSensorManager().getSensor().startMeasuring();
         System.out.println("[PEER " + self.id() + "] [" + node.getState() + "] Physical sensor simulator resumed.");
     }
 }
