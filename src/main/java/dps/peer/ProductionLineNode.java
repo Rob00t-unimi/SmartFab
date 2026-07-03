@@ -586,16 +586,16 @@ public class ProductionLineNode {
                     .build();
 
             /*
-             * Send request with a 60-second timeout.
-             * Why 60 seconds:
-             * 1) Queue Accumulation: When multiple nodes want to calibrate concurrently,
-             *    their calibration times (up to 7 seconds each) accumulate in the queue. A 60-second
+             * Send request with a 120-second (2-minute) timeout.
+             * Why 120 seconds:
+             * 1) Queue Accumulation: When multiple nodes (e.g., 15+) want to calibrate concurrently,
+             *    their calibration times (up to 7 seconds each) accumulate in the queue. A 120-second
              *    deadline ensures healthy waiting nodes do not time out prematurely, preserving mutual exclusion.
              * 2) Crash Handling (Section 10.2): If a peer process crashes, the OS closes the TCP socket immediately.
-             *    gRPC detects this instantly (throwing UNAVAILABLE in milliseconds), meaning we don't wait 60s
+             *    gRPC detects this instantly (throwing UNAVAILABLE in milliseconds), meaning we don't wait 120s
              *    to recover from a standard process crash.
              */
-            stub.withDeadlineAfter(60, TimeUnit.SECONDS).requestCalibration(request);
+            stub.withDeadlineAfter(120, TimeUnit.SECONDS).requestCalibration(request);
 
             // Reply received successfully
             addReply(peer.id());
@@ -833,6 +833,10 @@ public class ProductionLineNode {
     public synchronized void removeReply(int peerId) {
         repliesReceived.remove(peerId);
         notifyAll(); // Wake up thread in case count drops
+    }
+
+    public synchronized boolean hasReplyFrom(int peerId) {
+        return repliesReceived.contains(peerId);
     }
 
     public synchronized void incrementRepliesReceived() {
