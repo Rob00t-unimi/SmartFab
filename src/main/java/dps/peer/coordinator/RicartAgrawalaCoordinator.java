@@ -16,6 +16,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -24,10 +26,12 @@ import java.util.concurrent.TimeUnit;
  */
 public class RicartAgrawalaCoordinator {
 
+    /** =================================================== FIELDS & CONSTRUCTOR ========================================================================================= **/
+
     private final ProductionLineNode node;
     private final ProductionLine self;
     
-    // Ricart-Agrawala variables
+    // Ricart-Agrawala state variables
     private long logicalClock = 0;
     private long requestTimestamp = 0;
     private double requestCriticality = 0.0;
@@ -37,6 +41,9 @@ public class RicartAgrawalaCoordinator {
     // Reply tracking by peer ID
     private final Set<Integer> repliesReceived = new HashSet<>();
 
+    // Thread pool for parallel peer requests to avoid raw thread spawning overhead
+    private final ExecutorService executor = Executors.newCachedThreadPool();
+
     public RicartAgrawalaCoordinator(ProductionLineNode node, ProductionLine self) {
         if (node == null) {
             throw new IllegalArgumentException("ProductionLineNode reference cannot be null.");
@@ -45,7 +52,23 @@ public class RicartAgrawalaCoordinator {
         this.self = self;
     }
 
-    // Thread-safe Lamport clock and RA helper methods
+    /** =================================================== LAMPORT CLOCK & MEASUREMENTS ================================================================================= **/
+
+    public synchronized double getLastCalculatedAverage() {
+        return lastCalculatedAverage;
+    }
+    public synchronized void setLastCalculatedAverage(double average) {
+        this.lastCalculatedAverage = average;
+    }
+
+    /**
+     * Calculates the local criticality based on the window average and the threshold.
+     */
+    public synchronized double calcCriticality() {
+        double threshold = node.getVibrationThreshold();
+        return (lastCalculatedAverage - threshold) / threshold;
+    }
+
     public synchronized long getLogicalClock() {
         return logicalClock;
     }
@@ -57,6 +80,8 @@ public class RicartAgrawalaCoordinator {
     public synchronized void updateClockOnReceive(long receivedTime) {
         logicalClock = Math.max(logicalClock, receivedTime) + 1;
     }
+
+    /** =================================================== DEFERRED OBSERVERS MANAGEMENT =============================================================================== **/
 
     public synchronized void addDeferredObserver(int peerId, StreamObserver<CalibrationReply> observer, String reason) {
         deferredObservers.put(peerId, observer);
@@ -73,15 +98,8 @@ public class RicartAgrawalaCoordinator {
         return observers;
     }
 
-    public synchronized double getLastCalculatedAverage() {
-        return lastCalculatedAverage;
-    }
+    /** =================================================== REPLIES TRACKING ============================================================================================= **/
 
-    public synchronized void setLastCalculatedAverage(double average) {
-        this.lastCalculatedAverage = average;
-    }
-
-    // Reply tracking methods
     public synchronized void addReply(int peerId) {
         repliesReceived.add(peerId);
         notifyAll(); // Wake up thread waiting for replies
@@ -108,10 +126,7 @@ public class RicartAgrawalaCoordinator {
         repliesReceived.clear();
     }
 
-    public synchronized double calcCriticality() {
-        double threshold = node.getVibrationThreshold();
-        return (lastCalculatedAverage - threshold) / threshold;
-    }
+    /** =================================================== MUTUAL EXCLUSION (RICART-AGRAWALA) =========================================================================== **/
 
     /**
      * Broadcasts a calibration request to all peers.
@@ -141,12 +156,10 @@ public class RicartAgrawalaCoordinator {
     }
 
     /**
-     * Sends a calibration request to a single target peer asynchronously.
+     * Sends a calibration request to a single target peer asynchronously using the thread pool.
      */
     public void sendCalibrationRequestToPeerAsynchronously(ProductionLine peer) {
-        new Thread(() -> {
-            sendCalibrationRequestToPeer(peer);
-        }, "Re-Request-Thread-Node-" + self.id() + "-to-" + peer.id()).start();
+        executor.submit(() -> sendCalibrationRequestToPeer(peer));
     }
 
     /**
@@ -211,17 +224,22 @@ public class RicartAgrawalaCoordinator {
      * Transitions state to UNDER_CALIBRATION and performs the simulated calibration once allowed.
      */
     public void enterCalibrationAndWait() {
-        // The method is not entirely synchronized, otherwise we would block all threads for the entire duration of the calibration or the network communications
-        // so the synchronization is implemented at a finer granularity.
-
-        double avg = getLastCalculatedAverage();
-        
         System.out.println("[PEER " + self.id() + "] [WAITING_FOR_CALIBRATION] Initiating Ricart-Agrawala calibration sequence...");
         
-        // 1. Broadcast the requests to peers
+        // 1. Broadcast requests to peers
         requestCalibration();
 
         // 2. Wait until we receive all replies
+        waitForReplies();
+
+        // 3. Perform simulated physical calibration
+        simulateCalibration();
+    }
+
+    /**
+     * Blocks until all replies from active peers have been collected.
+     */
+    private void waitForReplies() {
         int requiredReplies = node.getNetworkManager().getPeerCount();
         synchronized (this) {
             while (getRepliesReceived() < requiredReplies) {
@@ -235,10 +253,15 @@ public class RicartAgrawalaCoordinator {
                 }
             }
             
-            // 3. Enter calibration section
+            // Enter calibration state
             node.setState(OperationalState.UNDER_CALIBRATION);
         }
+    }
 
+    /**
+     * Simulates physical calibration by sleeping a random duration between 3 and 7 seconds.
+     */
+    private void simulateCalibration() {
         // Generate random calibration duration between 3 and 7 seconds
         long duration = 3000 + (long) (Math.random() * 4000);
         System.out.println("[PEER " + self.id() + "] [UNDER_CALIBRATION] 🛠️ Entered calibration mode. Calibrating for " + duration + " ms...");
@@ -264,10 +287,22 @@ public class RicartAgrawalaCoordinator {
             observers = getAndClearDeferredObservers();     // get the observers accumulated when calibration was locked by this
         }
 
-        System.out.println("[PEER " + self.id() + "] [FULLY_OPERATIONAL] Calibration completed. Releasing " 
+        // Send delayed OK replies to queued peers
+        replyToDeferredObservers(observers);
+
+        // Restart physical sensor measuring loop
+        node.getSensorManager().getSensor().startMeasuring();
+        System.out.println("[PEER " + self.id() + "] [" + node.getState() + "] Physical sensor simulator resumed.");
+    }
+
+    /**
+     * Sends delayed CalibrationReply signals to all deferred observers.
+     */
+    private void replyToDeferredObservers(List<StreamObserver<CalibrationReply>> observers) {
+        System.out.println("[PEER " + self.id() + "] [" + node.getState() + "] Releasing " 
                 + observers.size() + " deferred replies...");
 
-        for (StreamObserver<CalibrationReply> observer : observers) {       // iterate on the observers
+        for (StreamObserver<CalibrationReply> observer : observers) {
             try {
                 observer.onNext(CalibrationReply.getDefaultInstance());     // send consensus reply
                 observer.onCompleted();     // close connection with peer (client)
@@ -275,9 +310,20 @@ public class RicartAgrawalaCoordinator {
                 System.err.println("[PEER " + self.id() + "] [" + node.getState() + "] ❌ Failed to send deferred reply to peer - Error: " + e.getMessage());
             }
         }
+    }
 
-        // Restart physical sensor measuring loop
-        node.getSensorManager().getSensor().startMeasuring();
-        System.out.println("[PEER " + self.id() + "] [" + node.getState() + "] Physical sensor simulator resumed.");
+    /**
+     * Safely shuts down the executor thread pool.
+     */
+    public void stop() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }

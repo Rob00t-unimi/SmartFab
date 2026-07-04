@@ -112,6 +112,8 @@ public class ProductionLineNode {
             finalNode.getSensorManager().stopMonitoring();
             // Stop the MQTT client connection
             finalNode.getMqttManager().stop();
+            // Stop the coordinator's thread pool
+            finalNode.getCoordinator().stop();
         }, "Shutdown-Hook-Node-" + node.getSelf().id()));
     }
 
@@ -162,6 +164,7 @@ public class ProductionLineNode {
                 node.getNetworkManager().stopGrpcServer();
                 node.getSensorManager().stopMonitoring();
                 node.getMqttManager().stop();
+                node.getCoordinator().stop();
             }
             System.exit(1);
         } catch (Exception e) {
@@ -170,6 +173,7 @@ public class ProductionLineNode {
                 node.getNetworkManager().stopGrpcServer();
                 node.getSensorManager().stopMonitoring();
                 node.getMqttManager().stop();
+                node.getCoordinator().stop();
             }
             System.exit(1);
         }
