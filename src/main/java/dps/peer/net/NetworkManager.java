@@ -47,29 +47,20 @@ public class NetworkManager {
         this.serverUrl = serverUrl;
     }
 
-    // Thread-safe peer management
+    /** =================================================== Thread-safe peers map management ====================================================================================== **/
+
     public synchronized void addPeer(ProductionLine peer) {
         if (peer == null) {
             throw new IllegalArgumentException("Peer cannot be null.");
         }
         peers.put(peer.id(), peer);
     }
+    public synchronized void removePeer(int peerId) { peers.remove(peerId); }
+    public synchronized List<ProductionLine> getPeers() { return new ArrayList<>(peers.values()); }
+    public synchronized int getPeerCount() { return peers.size(); }
+    public synchronized ProductionLine getPeerById(int id) { return peers.get(id); }
 
-    public synchronized void removePeer(int peerId) {
-        peers.remove(peerId);
-    }
-
-    public synchronized List<ProductionLine> getPeers() {
-        return new ArrayList<>(peers.values());
-    }
-
-    public synchronized int getPeerCount() {
-        return peers.size();
-    }
-
-    public synchronized ProductionLine getPeerById(int id) {
-        return peers.get(id);
-    }
+    /** =============================================================== gRPC ====================================================================================================== **/
 
     /**
      * Starts the local gRPC Server on the configured port.
@@ -79,21 +70,12 @@ public class NetworkManager {
             return;
         }
 
-        grpcServer = ServerBuilder.forPort(self.port())
+        grpcServer = ServerBuilder.forPort(self.port())     // grpc.ServerBuilder
                 .addService(new GrpcPeerService(node))
                 .build()
                 .start();
 
         System.out.println("[PEER " + self.id() + "] gRPC server started, listening on port " + self.port());
-
-        // Add a shutdown hook to stop the gRPC server when JVM shuts down
-        // starts a new thread that performs cleanup during the shutdown phase
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("[PEER " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
-            NetworkManager.this.stopGrpcServer();
-            node.getSensorManager().stopMonitoring();
-            node.getMqttManager().stop();
-        }));
     }
 
     /**
