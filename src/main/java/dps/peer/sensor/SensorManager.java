@@ -5,12 +5,11 @@ import dps.common.model.ProductionLine;
 import dps.peer.ProductionLineNode;
 import sensor.Measurement;
 import sensor.MonitoringSensor;
-
 import java.util.List;
 
 /**
- * Manages the physical sensor simulator, the sliding window buffer, and the
- * consumer thread loop that calculates vibration averages.
+ * Manages the physical monitoring sensor and the background thread
+ * consuming measurements from the sliding window buffer.
  */
 public class SensorManager {
 
@@ -18,17 +17,13 @@ public class SensorManager {
     private final ProductionLine self;
     private final double vibrationThreshold;
 
-    // Sensor and buffer instances
     private final SlidingWindowBuffer buffer = new SlidingWindowBuffer();
     private final MonitoringSensor sensor = new MonitoringSensor(buffer);
 
-    private Thread monitoringThread;    // consumer thread
-    private volatile boolean running = true;    // `volatile` saves to RAM, so all threads see exactly that value.
+    private Thread monitoringThread;
+    private volatile boolean running = false;
 
     public SensorManager(ProductionLineNode node, ProductionLine self, double vibrationThreshold) {
-        if (node == null) {
-            throw new IllegalArgumentException("ProductionLineNode reference cannot be null.");
-        }
         this.node = node;
         this.self = self;
         this.vibrationThreshold = vibrationThreshold;
@@ -50,6 +45,38 @@ public class SensorManager {
     }
 
     /**
+     * Pauses the physical sensor simulator.
+     */
+    public void pauseMeasuring() {
+        sensor.pauseMeasuring();
+    }
+
+    /**
+     * Resumes the physical sensor simulator.
+     */
+    public void startMeasuring() {
+        sensor.startMeasuring();
+    }
+
+    /**
+     * Clears the sliding window buffer.
+     */
+    public void clearBuffer() {
+        buffer.clear();
+    }
+
+    /**
+     * Computes the arithmetic average value of measurements in the window.
+     */
+    private double computeAverage(List<Measurement> window) {
+        double sum = 0;
+        for (Measurement m : window) {
+            sum += m.value();
+        }
+        return sum / window.size();
+    }
+
+    /**
      * Starts the physical sensor simulator and the background thread that consumes
      * measurements from the sliding window buffer. Starts mqtt publishing.
      */
@@ -62,42 +89,9 @@ public class SensorManager {
         sensor.startMeasuring();    // start sensor simulation
         System.out.println("[PEER " + self.id() + "] Physical sensor simulator started.");
 
-        monitoringThread = new Thread(() -> {   // create a thread with this lambda
+        monitoringThread = new Thread(() -> {
             while (running) {
-                try {
-                    // Block until 8 measurements are ready (50% overlap step on subsequent reads)
-                    List<Measurement> window = buffer.readAllAndClear();
-                    if (window.isEmpty()) {
-                        continue;
-                    }
-
-                    // Compute window average
-                    double sum = 0;
-                    for (Measurement m : window) {
-                        sum += m.value();
-                    }
-                    double average = sum / window.size();
-                    
-                    // Track average value for criticality calculation
-                    node.getCoordinator().setLastCalculatedAverage(average);
-
-                    // Buffer the average for MQTT telemetry
-                    node.getMqttManager().addAverage(average);
-
-                    System.out.println("[PEER " + self.id() + "] [" + node.getState() + "] Calculated sliding window average: " 
-                            + String.format("%.2f", average) + " (Threshold: " + vibrationThreshold + ")");
-
-                    // Check if threshold exceeded to trigger calibration transition
-                    if (average > vibrationThreshold && node.getState() == OperationalState.FULLY_OPERATIONAL) {
-                        node.transitionToWaitingForCalibration(average);
-                    }
-
-                } catch (Exception e) {
-                    if (!running) {
-                        break;
-                    }
-                    System.err.println("[PEER " + self.id() + "] Error in sensor monitoring loop: " + e.getMessage());
-                }
+                processSensorWindow();
             }
         });
         monitoringThread.setName("Sensor-Monitoring-Loop-Node-" + self.id());
@@ -105,6 +99,42 @@ public class SensorManager {
 
         // Start periodic MQTT telemetry thread
         node.getMqttManager().startMqttTelemetryPublishing();
+    }
+
+    /**
+     * Retrieves a window from the buffer, computes the average, forwards it to managers,
+     * and triggers calibration if the anomaly threshold is crossed.
+     */
+    private void processSensorWindow() {
+        try {
+            // Block until 8 measurements are ready (50% overlap step on subsequent reads)
+            List<Measurement> window = buffer.readAllAndClear();
+            if (window.isEmpty()) {
+                return;
+            }
+
+            // Compute window average
+            double average = computeAverage(window);
+            
+            // Track average value for criticality calculation
+            node.getCoordinator().setLastCalculatedAverage(average);
+
+            // Buffer the average for MQTT telemetry
+            node.getMqttManager().addAverage(average);
+
+            System.out.println("[PEER " + self.id() + "] [" + node.getState() + "] Calculated sliding window average: " 
+                    + String.format("%.2f", average) + " (Threshold: " + vibrationThreshold + ")");
+
+            // Check if threshold exceeded to trigger calibration transition
+            if (average > vibrationThreshold && node.getState() == OperationalState.FULLY_OPERATIONAL) {
+                node.transitionToWaitingForCalibration(average);
+            }
+
+        } catch (Exception e) {
+            if (running) {
+                System.err.println("[PEER " + self.id() + "] Error in sensor monitoring loop: " + e.getMessage());
+            }
+        }
     }
 
     /**
@@ -124,26 +154,5 @@ public class SensorManager {
             monitoringThread = null;
         }
         System.out.println("[PEER " + self.id() + "] Sensor monitoring loop stopped.");
-    }
-
-    /**
-     * Pauses the physical sensor simulator.
-     */
-    public void pauseMeasuring() {
-        sensor.pauseMeasuring();
-    }
-
-    /**
-     * Resumes the physical sensor simulator.
-     */
-    public void startMeasuring() {
-        sensor.startMeasuring();
-    }
-
-    /**
-     * Clears the sliding window buffer.
-     */
-    public void clearBuffer() {
-        buffer.clear();
     }
 }
