@@ -66,10 +66,10 @@ Ecco la traccia tecnica dettagliata di cosa avviene dall'avvio di uno script `.s
    * Viene inizializzato `LogUtils.redirectSystemOutAndErr` che intercetta lo standard output per aggiungere timestamp, colore ANSI associato all'ID del nodo e scrive in tempo reale su `smartfab.log`.
 
 ### Fase 2: Connessione di Rete e Mesh P2P
-5. **Avvio Server gRPC locale**: `NetworkManager.startGrpcServer()` crea e avvia un server Netty gRPC locale associandovi il servizio `PeerServiceImpl`.
+5. **Avvio Server gRPC locale**: `NetworkManager.startGrpcServer()` crea e avvia un server Netty gRPC locale associandovi il servizio `GrpcPeerService`.
 6. **Registrazione REST**: `NetworkManager.registerWithAdminServer()` effettua una chiamata HTTP POST `/nodes` inviando le informazioni di rete del nodo. Riceve in risposta la lista in formato JSON di tutti i peer precedentemente registrati.
 7. **Presentazione gRPC parallela**: `NetworkManager.presentSelfToPeers()` esegue una chiamata gRPC asincrona `present(PresentationRequest)` su ciascun peer ottenuto.
-   * Ciascun peer ricevente gestisce la richiesta in `PeerServiceImpl.present()`, aggiungendo il nuovo peer alla propria mappa logica interna tramite `NetworkManager.addPeer(newPeer)`.
+   * Ciascun peer ricevente gestisce la richiesta in `GrpcPeerService.present()`, aggiungendo il nuovo peer alla propria mappa logica interna tramite `NetworkManager.addPeer(newPeer)`.
 8. **Connessione MQTT**: `MqttManager.connectMqtt()` stabilisce la connessione con il broker locale Mosquitto e pubblica il primo messaggio di cambio stato (`OperationalState.FULLY_OPERATIONAL`) sul topic di stato del nodo.
 
 ### Fase 3: Monitoraggio e Telemetria
@@ -88,7 +88,7 @@ Ecco la traccia tecnica dettagliata di cosa avviene dall'avvio di uno script `.s
     * Il coordinatore incrementa il suo orologio logico di Lamport, memorizza il timestamp della richiesta, calcola la propria criticality dinamica `(media - soglia)/soglia` e azzera il set delle risposte ricevute.
     * Avvia l'invio in parallelo di chiamate gRPC bloccanti `requestCalibration(CalibrationRequest)` a tutti i peer registrati (con un timeout di 120s).
 16. **Valutazione Priorità gRPC (Server-Side sui Peer Riceventi)**:
-    Quando un peer riceve una richiesta gRPC in `PeerServiceImpl.requestCalibration()`:
+    Quando un peer riceve una richiesta gRPC in `GrpcPeerService.requestCalibration()`:
     * Aggiorna il proprio orologio logico tramite `RicartAgrawalaCoordinator.updateClockOnReceive()`.
     * Verifica lo stato locale:
       * **Se il ricevente è `UNDER_CALIBRATION`**: Differisce la risposta memorizzando l'observer gRPC del mittente tramite `RicartAgrawalaCoordinator.addDeferredObserver()`.

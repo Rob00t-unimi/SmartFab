@@ -83,10 +83,10 @@ Here is the technical timeline of events from script bootstrap to mutual exclusi
    * `LogUtils.redirectSystemOutAndErr` redirects standard output streams to intercept prints, prepend timestamps, apply ANSI colors matching the node ID, and write them in real-time to `smartfab.log`.
 
 ### Phase 2: Network Connection & P2P Mesh
-5. **Local gRPC Server**: `NetworkManager.startGrpcServer()` creates and starts a local Netty gRPC server hosting `PeerServiceImpl`.
+5. **Local gRPC Server**: `NetworkManager.startGrpcServer()` creates and starts a local Netty gRPC server hosting `GrpcPeerService`.
 6. **REST Registration**: `NetworkManager.registerWithAdminServer()` makes an HTTP POST `/nodes` call with the node's network identity. It receives the JSON list of all previously registered peers.
 7. **Parallel gRPC Presentation**: `NetworkManager.presentSelfToPeers()` executes an asynchronous gRPC `present(PresentationRequest)` call to each retrieved peer.
-   * Each receiving peer processes the request in `PeerServiceImpl.present()`, adding the new peer to its internal topology map via `NetworkManager.addPeer(newPeer)`.
+   * Each receiving peer processes the request in `GrpcPeerService.present()`, adding the new peer to its internal topology map via `NetworkManager.addPeer(newPeer)`.
 8. **MQTT Connection**: `MqttManager.connectMqtt()` establishes the connection with the Mosquitto broker and publishes the initial `OperationalState.FULLY_OPERATIONAL` update to the node's status topic.
 
 ### Phase 3: Monitoring & Telemetry
@@ -105,7 +105,7 @@ Here is the technical timeline of events from script bootstrap to mutual exclusi
     * The coordinator increments its Lamport clock, records the request timestamp, calculates its dynamic criticality `(average - threshold)/threshold`, and resets the set of received replies.
     * It broadcasts parallel gRPC blocking `requestCalibration(CalibrationRequest)` calls to all registered peers (using a 120-second timeout).
 16. **gRPC Priority Valuation (Server-Side on Receiving Peer)**:
-    When a peer receives a gRPC request in `PeerServiceImpl.requestCalibration()`:
+    When a peer receives a gRPC request in `GrpcPeerService.requestCalibration()`:
     * It updates its logical clock via `RicartAgrawalaCoordinator.updateClockOnReceive()`.
     * It checks its local state:
       * **If the receiver is `UNDER_CALIBRATION`**: It defers the reply by storing the sender's gRPC observer via `RicartAgrawalaCoordinator.addDeferredObserver()`.
