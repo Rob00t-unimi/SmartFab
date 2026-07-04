@@ -3,7 +3,7 @@ package dps.peer;
 import dps.common.model.OperationalState;
 import dps.common.model.ProductionLine;
 import dps.peer.config.NodeConfig;
-import dps.peer.net.PeerServiceImpl;
+import dps.peer.net.GrpcPeerService;
 import dps.peer.proto.CalibrationRequest;
 import dps.peer.proto.CalibrationReply;
 import dps.peer.proto.PeerServiceGrpc;
@@ -176,7 +176,7 @@ public class ProductionLineNodeTest {
         assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
 
         // Start monitoring loop
-        node.startMonitoring();
+        node.getSensorManager().startMonitoring();
         node.getSensorManager().getSensor().pauseMeasuring();
         node.getSensorManager().getBuffer().clear();
 
@@ -192,7 +192,8 @@ public class ProductionLineNodeTest {
         // Verify that the state remains FULLY_OPERATIONAL since threshold logic is not active in Commit 2
         assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
 
-        node.stopMonitoring();
+        node.getSensorManager().stopMonitoring();
+        node.getMqttManager().stop();
     }
 
     @Test
@@ -203,7 +204,7 @@ public class ProductionLineNodeTest {
         assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
 
         // Start monitoring
-        node.startMonitoring();
+        node.getSensorManager().startMonitoring();
 
         // Pause the physical sensor so it doesn't write noise measurements concurrently
         node.getSensorManager().getSensor().pauseMeasuring();
@@ -222,7 +223,8 @@ public class ProductionLineNodeTest {
         assertEquals(OperationalState.UNDER_CALIBRATION, node.getState());
 
         // Cleanup
-        node.stopMonitoring();
+        node.getSensorManager().stopMonitoring();
+        node.getMqttManager().stop();
     }
 
     @Test
@@ -248,7 +250,7 @@ public class ProductionLineNodeTest {
     public void testCalibrationRequestPriorityHandling() {
         ProductionLine self = new ProductionLine(2, "127.0.0.1", 5002);
         ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
-        PeerServiceImpl service = new PeerServiceImpl(node);
+        GrpcPeerService service = new GrpcPeerService(node);
 
         // Case 1: Node is FULLY_OPERATIONAL. Should reply immediately.
         node.setState(OperationalState.FULLY_OPERATIONAL);
@@ -379,8 +381,11 @@ public class ProductionLineNodeTest {
             // Perform request broadcast
             node.getCoordinator().requestCalibration();
 
-            // Wait a brief moment for the async task to complete
-            Thread.sleep(300);
+            // Wait up to 2 seconds for the async reply to complete
+            long waitStart = System.currentTimeMillis();
+            while (node.getCoordinator().getRepliesReceived() < 1 && (System.currentTimeMillis() - waitStart) < 2000) {
+                Thread.sleep(50);
+            }
 
             // Assert logical clock incremented
             assertEquals(1, node.getCoordinator().getLogicalClock());

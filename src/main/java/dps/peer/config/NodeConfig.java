@@ -30,7 +30,11 @@ public record NodeConfig(ProductionLine self, String serverUrl, String mqttBroke
         try {
             port = Integer.parseInt(args[2]);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Port must be an integer.");
+            throw new IllegalArgumentException("Port must be an integer");
+        }
+
+        if (port < 1024 || port > 65535) {
+            throw new IllegalArgumentException("Port must be between 1024 and 65535");
         }
 
         String serverUrl = args.length >= 4 ? args[3] : "http://localhost:8080";

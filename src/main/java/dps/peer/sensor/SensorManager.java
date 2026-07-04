@@ -42,6 +42,9 @@ public class SensorManager {
         return sensor;
     }
 
+    /**
+     * Checks if the monitoring thread loop is configured to run.
+     */
     public boolean isRunning() {
         return running;
     }

@@ -15,12 +15,12 @@ import io.grpc.stub.StreamObserver;
  * gRPC Service implementation for incoming peer requests.
  * Delegates topology additions to NetworkManager and mutual exclusion coordination to RicartAgrawalaCoordinator.
  */
-public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
+public class GrpcPeerService extends PeerServiceGrpc.PeerServiceImplBase {
 
     private final ProductionLineNode node;
     private final RicartAgrawalaCoordinator coordinator;
 
-    public PeerServiceImpl(ProductionLineNode node) {
+    public GrpcPeerService(ProductionLineNode node) {
         if (node == null) {
             throw new IllegalArgumentException("ProductionLineNode reference cannot be null.");
         }
@@ -106,7 +106,7 @@ public class PeerServiceImpl extends PeerServiceGrpc.PeerServiceImplBase {
                     decisionReason = "local node is already UNDER_CALIBRATION";
                 } else if (localState == OperationalState.WAITING_FOR_CALIBRATION) {
                     // Both want the resource. Compare priority (criticality then ID)
-                    double localCriticality = node.calcCriticality();
+                    double localCriticality = node.getCoordinator().calcCriticality();
 
                     if (localCriticality > senderCriticality) {
                         defer = true;

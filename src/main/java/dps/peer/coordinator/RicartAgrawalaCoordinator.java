@@ -108,6 +108,11 @@ public class RicartAgrawalaCoordinator {
         repliesReceived.clear();
     }
 
+    public synchronized double calcCriticality() {
+        double threshold = node.getVibrationThreshold();
+        return (lastCalculatedAverage - threshold) / threshold;
+    }
+
     /**
      * Broadcasts a calibration request to all peers.
      */
@@ -117,7 +122,7 @@ public class RicartAgrawalaCoordinator {
         synchronized (this) {
             incrementClock(); // send event -> increment Lamport's clock
             requestTimestamp = getLogicalClock(); // memorize current clock value
-            requestCriticality = node.calcCriticality();  // calculate criticality based on threshold
+            requestCriticality = calcCriticality();  // calculate criticality based on threshold
             resetRepliesReceived(); // reset replies counter to start new round
         }
 

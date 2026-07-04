@@ -131,7 +131,7 @@ public class MqttManager {
             rootNode.put("timestamp", System.currentTimeMillis());
             
             if (newState == OperationalState.WAITING_FOR_CALIBRATION || newState == OperationalState.UNDER_CALIBRATION) {
-                rootNode.put("criticality", node.calcCriticality());
+                rootNode.put("criticality", node.getCoordinator().calcCriticality());
             }
             
             String payload = mapper.writeValueAsString(rootNode);

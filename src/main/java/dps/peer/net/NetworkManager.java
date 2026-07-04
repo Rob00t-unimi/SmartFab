@@ -47,7 +47,7 @@ public class NetworkManager {
         this.serverUrl = serverUrl;
     }
 
-    // Thread-safe peer management using basic synchronized blocks
+    // Thread-safe peer management
     public synchronized void addPeer(ProductionLine peer) {
         if (peer == null) {
             throw new IllegalArgumentException("Peer cannot be null.");
@@ -80,7 +80,7 @@ public class NetworkManager {
         }
 
         grpcServer = ServerBuilder.forPort(self.port())
-                .addService(new PeerServiceImpl(node))
+                .addService(new GrpcPeerService(node))
                 .build()
                 .start();
 
@@ -91,7 +91,8 @@ public class NetworkManager {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("[PEER " + self.id() + "] Shutdown hook triggered. Stopping gRPC server and monitoring...");
             NetworkManager.this.stopGrpcServer();
-            node.stopMonitoring();
+            node.getSensorManager().stopMonitoring();
+            node.getMqttManager().stop();
         }));
     }
 
