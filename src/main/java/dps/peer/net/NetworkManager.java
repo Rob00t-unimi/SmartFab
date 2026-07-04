@@ -47,7 +47,7 @@ public class NetworkManager {
         this.serverUrl = serverUrl;
     }
 
-    /** =================================================== Thread-safe peers map management ====================================================================================== **/
+    /** =================================================== THREAD-SAFE PEERS MAP MANAGEMENT ====================================================================================== **/
 
     public synchronized void addPeer(ProductionLine peer) {
         if (peer == null) {
@@ -60,7 +60,7 @@ public class NetworkManager {
     public synchronized int getPeerCount() { return peers.size(); }
     public synchronized ProductionLine getPeerById(int id) { return peers.get(id); }
 
-    /** =============================================================== gRPC ====================================================================================================== **/
+    /** =================================================== PEER gRPC SERVER MANAGEMENT =========================================================================================== **/
 
     /**
      * Starts the local gRPC Server on the configured port.
@@ -99,7 +99,8 @@ public class NetworkManager {
     }
 
     /**
-     * Blocks the thread until the gRPC server is terminated.
+     * Blocks and suspends the calling thread until the local gRPC server terminates.
+     * Used to keep the main process alive while background gRPC and MQTT threads run.
      */
     public void blockUntilGRPCShutdown() throws InterruptedException {
         if (grpcServer != null) {
@@ -107,6 +108,8 @@ public class NetworkManager {
         }
     }
 
+    /** =============================================================== REST REGISTRATION =========================================================================================== **/
+    
     /**
      * Registers this node with the Admin Server via REST POST.
      * Populates the local peer list with the response on success.
@@ -135,11 +138,15 @@ public class NetworkManager {
         }
     }
 
+    /** =============================================================== GRPC PRESENTATION =========================================================================================== **/
+
     /**
      * Broadcasts a gRPC presentation request in parallel to all currently known peers.
      */
     public void presentSelfToPeers() {
         List<ProductionLine> currentPeers = getPeers(); // synchronized
+
+        // NO PEERS
         if (currentPeers.isEmpty()) {
             System.out.println("[PEER " + self.id() + "] No existing peers to present to in local network view.");
             return;
@@ -147,7 +154,8 @@ public class NetworkManager {
 
         System.out.println("[PEER " + self.id() + "] Sending gRPC presentation requests to " + currentPeers.size() + " peer(s) in parallel...");
 
-        // P2P broadcasts must be done in parallel by using CachedThreadPool.
+        // P2P BROADCAST
+        // must be done in parallel by using CachedThreadPool.
         ExecutorService executor = Executors.newCachedThreadPool();
 
         for (ProductionLine peer : currentPeers) {
@@ -197,7 +205,7 @@ public class NetworkManager {
             });
         }
 
-        // Shutdown Thread Pool
+        // SHUTDOWN THREAD POOL
         executor.shutdown();
         try {
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
