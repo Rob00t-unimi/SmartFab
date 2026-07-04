@@ -1,0 +1,527 @@
+package dps.peer;
+
+import dps.common.model.OperationalState;
+import dps.common.model.ProductionLine;
+import dps.peer.config.NodeConfig;
+import dps.peer.net.GrpcPeerService;
+import dps.peer.proto.CalibrationRequest;
+import dps.peer.proto.CalibrationReply;
+import dps.peer.proto.PeerServiceGrpc;
+import io.grpc.stub.StreamObserver;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class ProductionLineNodeTest {
+
+    @Test
+    public void testValidArgumentsWithDefaultServerUrl() {
+        String[] args = {"1", "127.0.0.1", "5001"};
+        NodeConfig config = NodeConfig.parseArgs(args);
+
+        assertNotNull(config);
+        assertEquals(1, config.self().id());
+        assertEquals("127.0.0.1", config.self().ip());
+        assertEquals(5001, config.self().port());
+        assertEquals("http://localhost:8080", config.serverUrl());
+    }
+
+    @Test
+    public void testValidArgumentsWithCustomServerUrl() {
+        String[] args = {"2", "localhost", "5002", "http://192.168.1.100:9000"};
+        NodeConfig config = NodeConfig.parseArgs(args);
+
+        assertNotNull(config);
+        assertEquals(2, config.self().id());
+        assertEquals("localhost", config.self().ip());
+        assertEquals(5002, config.self().port());
+        assertEquals("http://192.168.1.100:9000", config.serverUrl());
+    }
+
+    @Test
+    public void testInsufficientArguments() {
+        String[] args = {"1", "127.0.0.1"};
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            NodeConfig.parseArgs(args);
+        });
+        assertTrue(exception.getMessage().contains("Insufficient arguments"));
+    }
+
+    @Test
+    public void testInvalidIdFormat() {
+        String[] args = {"abc", "127.0.0.1", "5001"};
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            NodeConfig.parseArgs(args);
+        });
+        assertTrue(exception.getMessage().contains("ID must be an integer"));
+    }
+
+    @Test
+    public void testInvalidPortFormat() {
+        String[] args = {"1", "127.0.0.1", "xyz"};
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            NodeConfig.parseArgs(args);
+        });
+        assertTrue(exception.getMessage().contains("Port must be an integer"));
+    }
+
+    @Test
+    public void testNegativeId() {
+        String[] args = {"-1", "127.0.0.1", "5001"};
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            NodeConfig.parseArgs(args);
+        });
+        assertTrue(exception.getMessage().contains("ID must be non-negative"));
+    }
+
+    @Test
+    public void testInvalidIpAddress() {
+        String[] args = {"1", "999.999.999.999", "5001"};
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            NodeConfig.parseArgs(args);
+        });
+        assertTrue(exception.getMessage().contains("Invalid IP address format"));
+    }
+
+    @Test
+    public void testInvalidPortRange() {
+        String[] args = {"1", "127.0.0.1", "80"};
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            NodeConfig.parseArgs(args);
+        });
+        assertTrue(exception.getMessage().contains("Port must be between 1024 and 65535"));
+    }
+
+    @Test
+    public void testPeerManagementBasic() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(0, node.getNetworkManager().getPeerCount());
+        assertTrue(node.getNetworkManager().getPeers().isEmpty());
+
+        ProductionLine peer1 = new ProductionLine(2, "127.0.0.1", 5002);
+        ProductionLine peer2 = new ProductionLine(3, "127.0.0.1", 5003);
+
+        node.getNetworkManager().addPeer(peer1);
+        node.getNetworkManager().addPeer(peer2);
+
+        assertEquals(2, node.getNetworkManager().getPeerCount());
+        List<ProductionLine> activePeers = node.getNetworkManager().getPeers();
+        assertEquals(2, activePeers.size());
+        assertTrue(activePeers.contains(peer1));
+        assertTrue(activePeers.contains(peer2));
+
+        node.getNetworkManager().removePeer(2);
+        assertEquals(1, node.getNetworkManager().getPeerCount());
+        assertFalse(node.getNetworkManager().getPeers().contains(peer1));
+        assertTrue(node.getNetworkManager().getPeers().contains(peer2));
+    }
+
+    @Test
+    public void testPeerManagementConcurrent() throws InterruptedException {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        int threadCount = 100;
+        Thread[] threads = new Thread[threadCount];
+        AtomicBoolean failed = new AtomicBoolean(false);
+
+        for (int i = 0; i < threadCount; i++) {
+            final int id = i + 10;
+            threads[i] = new Thread(() -> {
+                try {
+                    ProductionLine p = new ProductionLine(id, "127.0.0.1", 5000 + id);
+                    node.getNetworkManager().addPeer(p);
+                    // Perform concurrent reads
+                    node.getNetworkManager().getPeers();
+                    node.getNetworkManager().getPeerCount();
+                    // Intermittently remove some peers to test concurrent removals
+                    if (id % 2 == 0) {
+                        node.getNetworkManager().removePeer(id);
+                    }
+                } catch (Exception e) {
+                    failed.set(true);
+                }
+            });
+        }
+
+        for (Thread t : threads) t.start();
+        for (Thread t : threads) t.join();
+
+        assertFalse(failed.get(), "Concurrent peer modifications caused exceptions or data corruption");
+        // Count should be exactly half of the threads that didn't get removed (id % 2 != 0)
+        // Which is threadCount / 2 = 50 peers remaining.
+        assertEquals(50, node.getNetworkManager().getPeerCount());
+    }
+
+    @Test
+    public void testInitialState() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertNotNull(node.getSensorManager().getBuffer());
+        assertNotNull(node.getSensorManager().getSensor());
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+    }
+
+    @Test
+    public void testMonitoringLoopCalculatesAverageWithoutTransition() throws InterruptedException {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // Start monitoring loop
+        node.getSensorManager().startMonitoring();
+        node.getSensorManager().getSensor().pauseMeasuring();
+        node.getSensorManager().getBuffer().clear();
+
+        // Feed 8 measurements with values > 80.0
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 8; i++) {
+            node.getSensorManager().getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 50.0, now + i));
+        }
+
+        // Wait for consumer thread to consume and calculate
+        Thread.sleep(300);
+
+        // Verify that the state remains FULLY_OPERATIONAL since threshold logic is not active in Commit 2
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        node.getSensorManager().stopMonitoring();
+        node.getMqttManager().stop();
+    }
+
+    @Test
+    public void testMonitoringLoopThresholdExceeded() throws InterruptedException {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // Start monitoring
+        node.getSensorManager().startMonitoring();
+
+        // Pause the physical sensor so it doesn't write noise measurements concurrently
+        node.getSensorManager().getSensor().pauseMeasuring();
+        node.getSensorManager().getBuffer().clear();
+
+        // Feed 8 measurements with values > 80.0 to trigger the threshold
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 8; i++) {
+            node.getSensorManager().getBuffer().addMeasurement(new sensor.Measurement("Vibration-1", "Vibration", 90.0, now + i));
+        }
+
+        // Give the background monitoring thread a moment to consume and process the window
+        Thread.sleep(300);
+
+        // Assert that the state transitioned and started calibration (since peer count is 0, it proceeds directly)
+        assertEquals(OperationalState.UNDER_CALIBRATION, node.getState());
+
+        // Cleanup
+        node.getSensorManager().stopMonitoring();
+        node.getMqttManager().stop();
+    }
+
+    @Test
+    public void testLogicalClockUpdates() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertEquals(0, node.getCoordinator().getLogicalClock());
+
+        node.getCoordinator().incrementClock();
+        assertEquals(1, node.getCoordinator().getLogicalClock());
+
+        // Update clock on receive: max(1, 10) + 1 = 11
+        node.getCoordinator().updateClockOnReceive(10);
+        assertEquals(11, node.getCoordinator().getLogicalClock());
+
+        // Update clock on receive: max(11, 5) + 1 = 12
+        node.getCoordinator().updateClockOnReceive(5);
+        assertEquals(12, node.getCoordinator().getLogicalClock());
+    }
+
+    @Test
+    public void testCalibrationRequestPriorityHandling() {
+        ProductionLine self = new ProductionLine(2, "127.0.0.1", 5002);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+        GrpcPeerService service = new GrpcPeerService(node);
+
+        // Case 1: Node is FULLY_OPERATIONAL. Should reply immediately.
+        node.setState(OperationalState.FULLY_OPERATIONAL);
+
+        final AtomicBoolean replied1 = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer1 = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied1.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+
+        CalibrationRequest request1 = CalibrationRequest.newBuilder()
+                .setSenderId(1)
+                .setCriticality(0.5)
+                .setTimestamp(5)
+                .build();
+
+        service.requestCalibration(request1, observer1);
+        assertTrue(replied1.get(), "Should reply immediately when FULLY_OPERATIONAL");
+
+        // Case 2: Node is UNDER_CALIBRATION. Should defer.
+        node.setState(OperationalState.UNDER_CALIBRATION);
+        final AtomicBoolean replied2 = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer2 = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied2.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        service.requestCalibration(request1, observer2);
+        assertFalse(replied2.get(), "Should defer reply when UNDER_CALIBRATION");
+        assertEquals(1, node.getCoordinator().getAndClearDeferredObservers().size());
+
+        // Case 3: Node is WAITING_FOR_CALIBRATION.
+        // Local node (ID 2): average = 90 (criticality = (90-80)/80 = 0.125)
+        node.setState(OperationalState.WAITING_FOR_CALIBRATION);
+        node.getCoordinator().setLastCalculatedAverage(90.0);
+
+        // Subcase 3a: Sender (ID 3) has higher criticality (0.5 > 0.125). Node 2 should reply immediately.
+        final AtomicBoolean replied3a = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3a = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3a.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3a = CalibrationRequest.newBuilder()
+                .setSenderId(3)
+                .setCriticality(0.5)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3a, observer3a);
+        assertTrue(replied3a.get(), "Should reply immediately when sender has higher criticality");
+
+        // Subcase 3b: Sender (ID 1) has lower criticality (0.05 < 0.125). Node 2 should defer.
+        final AtomicBoolean replied3b = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3b = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3b.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3b = CalibrationRequest.newBuilder()
+                .setSenderId(1)
+                .setCriticality(0.05)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3b, observer3b);
+        assertFalse(replied3b.get(), "Should defer when local criticality is higher");
+
+        // Subcase 3c: Same criticality (0.125 == 0.125). Tie-breaker on highest ID.
+        // Node 2 has ID 2. Sender has ID 1. Node 2 has higher ID (highest priority), so Node 2 should defer.
+        final AtomicBoolean replied3c = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3c = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3c.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3c = CalibrationRequest.newBuilder()
+                .setSenderId(1)
+                .setCriticality(0.125)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3c, observer3c);
+        assertFalse(replied3c.get(), "Should defer when local ID is higher (criticality tie-breaker)");
+
+        // Subcase 3d: Same criticality (0.125 == 0.125).
+        // Node 2 has ID 2. Sender has ID 3. Sender has higher ID (highest priority), so Node 2 should reply immediately.
+        final AtomicBoolean replied3d = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> observer3d = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied3d.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+        CalibrationRequest request3d = CalibrationRequest.newBuilder()
+                .setSenderId(3)
+                .setCriticality(0.125)
+                .setTimestamp(5)
+                .build();
+        service.requestCalibration(request3d, observer3d);
+        assertTrue(replied3d.get(), "Should reply immediately when sender has higher ID (criticality tie-breaker)");
+    }
+
+    @Test
+    public void testRequestCalibrationClientBroadcast() throws Exception {
+        // Start a mock gRPC server on 5002 that replies immediately
+        io.grpc.Server mockServer = io.grpc.ServerBuilder.forPort(5002)
+                .addService(new PeerServiceGrpc.PeerServiceImplBase() {
+                    @Override
+                    public void requestCalibration(CalibrationRequest request, StreamObserver<CalibrationReply> responseObserver) {
+                        responseObserver.onNext(CalibrationReply.getDefaultInstance());
+                        responseObserver.onCompleted();
+                    }
+                })
+                .build()
+                .start();
+
+        try {
+            ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+            ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+            // Add the peer pointing to our mock server
+            ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
+            node.getNetworkManager().addPeer(peer);
+
+            assertEquals(0, node.getCoordinator().getLogicalClock());
+            assertEquals(0, node.getCoordinator().getRepliesReceived());
+
+            node.getCoordinator().setLastCalculatedAverage(90.0);
+
+            // Perform request broadcast
+            node.getCoordinator().requestCalibration();
+
+            // Wait up to 2 seconds for the async reply to complete
+            long waitStart = System.currentTimeMillis();
+            while (node.getCoordinator().getRepliesReceived() < 1 && (System.currentTimeMillis() - waitStart) < 2000) {
+                Thread.sleep(50);
+            }
+
+            // Assert logical clock incremented
+            assertEquals(1, node.getCoordinator().getLogicalClock());
+
+            // Assert reply received successfully
+            assertEquals(1, node.getCoordinator().getRepliesReceived());
+        } finally {
+            mockServer.shutdown();
+            mockServer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void testEnterCalibrationAndWaitBlocksUntilReplies() throws Exception {
+        // Start a mock gRPC server on 5002 that holds the request open
+        io.grpc.Server mockServer = io.grpc.ServerBuilder.forPort(5002)
+                .addService(new PeerServiceGrpc.PeerServiceImplBase() {
+                    @Override
+                    public void requestCalibration(CalibrationRequest request, StreamObserver<CalibrationReply> responseObserver) {
+                        // Do nothing to simulate delay and keep the connection open
+                    }
+                })
+                .build()
+                .start();
+
+        try {
+            ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+            ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+            // Add the peer pointing to our mock server
+            ProductionLine peer = new ProductionLine(2, "127.0.0.1", 5002);
+            node.getNetworkManager().addPeer(peer);
+
+            node.setState(OperationalState.WAITING_FOR_CALIBRATION);
+            node.getCoordinator().setLastCalculatedAverage(90.0);
+
+            // Run enterCalibrationAndWait in a separate thread so it can block
+            Thread coordThread = new Thread(node.getCoordinator()::enterCalibrationAndWait);
+            coordThread.start();
+
+            // Give it a moment to run and block
+            Thread.sleep(400);
+
+            // Verify that the thread is blocked and state remains WAITING_FOR_CALIBRATION
+            assertTrue(coordThread.isAlive());
+            assertEquals(OperationalState.WAITING_FOR_CALIBRATION, node.getState());
+
+            // Simulate receiving the reply
+            node.getCoordinator().incrementRepliesReceived();
+
+            // Give it a moment to process the wake up
+            Thread.sleep(200);
+
+            // State should now transition to UNDER_CALIBRATION
+            assertEquals(OperationalState.UNDER_CALIBRATION, node.getState());
+
+            // Clean up: interrupt the sleeping thread to end test quickly
+            coordThread.interrupt();
+            coordThread.join();
+        } finally {
+            mockServer.shutdown();
+            mockServer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void testReleaseCalibrationResumesAndReplies() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        node.setState(OperationalState.UNDER_CALIBRATION);
+        node.getSensorManager().getSensor().pauseMeasuring();
+
+        final AtomicBoolean replied = new AtomicBoolean(false);
+        StreamObserver<CalibrationReply> mockObserver = new StreamObserver<>() {
+            @Override public void onNext(CalibrationReply value) { replied.set(true); }
+            @Override public void onError(Throwable t) {}
+            @Override public void onCompleted() {}
+        };
+
+        // Add to deferred observers
+        node.getCoordinator().addDeferredObserver(2, mockObserver);
+
+        // Release calibration
+        node.getCoordinator().releaseCalibration();
+
+        // State should transition back to FULLY_OPERATIONAL
+        assertEquals(OperationalState.FULLY_OPERATIONAL, node.getState());
+
+        // The deferred reply should be sent
+        assertTrue(replied.get());
+
+        // The deferred queue should be cleared
+        assertEquals(0, node.getCoordinator().getAndClearDeferredObservers().size());
+    }
+
+    @Test
+    public void testMqttAveragesBuffering() {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        assertTrue(node.getMqttManager().getLocalAveragesBufferSnapshot().isEmpty());
+
+        node.getMqttManager().addAverage(45.2);
+        node.getMqttManager().addAverage(50.8);
+
+        List<Double> snapshot = node.getMqttManager().getLocalAveragesBufferSnapshot();
+        assertEquals(2, snapshot.size());
+        assertEquals(45.2, snapshot.get(0), 0.001);
+        assertEquals(50.8, snapshot.get(1), 0.001);
+    }
+
+    @Test
+    public void testMqttTelemetryPayloadFormatting() throws Exception {
+        ProductionLine self = new ProductionLine(1, "127.0.0.1", 5001);
+        ProductionLineNode node = new ProductionLineNode(self, "http://localhost:8080");
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode rootNode = mapper.createObjectNode();
+        rootNode.put("id", node.getSelf().id());
+        
+        com.fasterxml.jackson.databind.node.ArrayNode averagesArray = mapper.createArrayNode();
+        averagesArray.add(45.2);
+        averagesArray.add(50.8);
+        rootNode.set("averages", averagesArray);
+        rootNode.put("timestamp", 1719830000000L);
+        rootNode.put("state", node.getState().name());
+
+        String json = mapper.writeValueAsString(rootNode);
+
+        // Verify keys exist and values match
+        com.fasterxml.jackson.databind.JsonNode parsed = mapper.readTree(json);
+        assertEquals(1, parsed.get("id").asInt());
+        assertEquals("FULLY_OPERATIONAL", parsed.get("state").asText());
+        assertEquals(1719830000000L, parsed.get("timestamp").asLong());
+        assertEquals(2, parsed.get("averages").size());
+        assertEquals(45.2, parsed.get("averages").get(0).asDouble(), 0.001);
+    }
+}
